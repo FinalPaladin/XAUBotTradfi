@@ -1,0 +1,16 @@
+services:
+  backend:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      APP_NAME: XAUBot TradFi
+      DEBUG: "false"
+      DATABASE_URL: sqlite:////app/data/xau_bot.db
+      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+    volumes:
+      - xau_bot_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  xau_bot_data:

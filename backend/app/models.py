@@ -1,0 +1,183 @@
+"""SQLAlchemy ORM models for bot configuration, positions, history, and logs."""
+
+import enum
+from datetime import datetime
+
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Enum,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    func,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.database import Base
+
+
+class BotStatus(str, enum.Enum):
+    RUNNING = "RUNNING"
+    STOPPED = "STOPPED"
+
+
+class OrderSide(str, enum.Enum):
+    BUY = "BUY"
+    SELL = "SELL"
+
+
+class LogLevel(str, enum.Enum):
+    DEBUG = "DEBUG"
+    INFO = "INFO"
+    WARNING = "WARNING"
+    ERROR = "ERROR"
+
+
+class BotConfig(Base):
+    """Per-bot trading configuration and strategy weights."""
+
+    __tablename__ = "bot_config"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    status: Mapped[BotStatus] = mapped_column(
+        Enum(BotStatus),
+        default=BotStatus.STOPPED,
+        nullable=False,
+    )
+
+    take_profit_pct: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+    stop_loss_pct: Mapped[float] = mapped_column(Float, default=0.5, nullable=False)
+    trailing_stop_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    trailing_stop_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # Donchian channel strategy
+    donchian_period: Mapped[int] = mapped_column(Integer, default=20, nullable=False)
+    donchian_weight: Mapped[float] = mapped_column(Float, default=0.25, nullable=False)
+
+    # SuperTrend strategy
+    supertrend_period: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
+    supertrend_multiplier: Mapped[float] = mapped_column(
+        Float, default=3.0, nullable=False
+    )
+    supertrend_weight: Mapped[float] = mapped_column(Float, default=0.25, nullable=False)
+
+    # RSI strategy
+    rsi_period: Mapped[int] = mapped_column(Integer, default=14, nullable=False)
+    rsi_overbought: Mapped[float] = mapped_column(Float, default=70.0, nullable=False)
+    rsi_oversold: Mapped[float] = mapped_column(Float, default=30.0, nullable=False)
+    rsi_weight: Mapped[float] = mapped_column(Float, default=0.25, nullable=False)
+
+    # Combined signal gate
+    signal_threshold: Mapped[float] = mapped_column(Float, default=0.6, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    positions: Mapped[list["TradePosition"]] = relationship(
+        back_populates="bot",
+        cascade="all, delete-orphan",
+    )
+    history: Mapped[list["TradeHistory"]] = relationship(
+        back_populates="bot",
+        cascade="all, delete-orphan",
+    )
+    logs: Mapped[list["SystemLog"]] = relationship(back_populates="bot")
+
+
+class TradePosition(Base):
+    """Open positions synced from MT5 / Bybit TradFi."""
+
+    __tablename__ = "trade_positions"
+    __table_args__ = (Index("ix_trade_positions_ticket", "ticket_id", unique=True),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    bot_id: Mapped[int] = mapped_column(
+        ForeignKey("bot_config.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    ticket_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    symbol: Mapped[str] = mapped_column(String(32), default="XAUUSD", nullable=False)
+    side: Mapped[OrderSide] = mapped_column(Enum(OrderSide), nullable=False)
+    volume: Mapped[float] = mapped_column(Float, nullable=False)
+    entry_price: Mapped[float] = mapped_column(Float, nullable=False)
+    current_tp: Mapped[float | None] = mapped_column(Float, nullable=True)
+    current_sl: Mapped[float | None] = mapped_column(Float, nullable=True)
+    opened_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    bot: Mapped["BotConfig"] = relationship(back_populates="positions")
+
+
+class TradeHistory(Base):
+    """Closed trades for reporting and UI charts."""
+
+    __tablename__ = "trade_history"
+    __table_args__ = (Index("ix_trade_history_closed_at", "closed_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    bot_id: Mapped[int] = mapped_column(
+        ForeignKey("bot_config.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    ticket_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    symbol: Mapped[str] = mapped_column(String(32), default="XAUUSD", nullable=False)
+    side: Mapped[OrderSide] = mapped_column(Enum(OrderSide), nullable=False)
+    volume: Mapped[float] = mapped_column(Float, nullable=False)
+    entry_price: Mapped[float] = mapped_column(Float, nullable=False)
+    exit_price: Mapped[float] = mapped_column(Float, nullable=False)
+    profit_loss: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    close_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    closed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    bot: Mapped["BotConfig"] = relationship(back_populates="history")
+
+
+class SystemLog(Base):
+    """Bot activity logs and API / MT5 errors."""
+
+    __tablename__ = "system_logs"
+    __table_args__ = (Index("ix_system_logs_created_at", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    bot_id: Mapped[int | None] = mapped_column(
+        ForeignKey("bot_config.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    level: Mapped[LogLevel] = mapped_column(
+        Enum(LogLevel),
+        default=LogLevel.INFO,
+        nullable=False,
+    )
+    source: Mapped[str] = mapped_column(String(64), default="bot", nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    bot: Mapped["BotConfig | None"] = relationship(back_populates="logs")
