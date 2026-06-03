@@ -50,6 +50,14 @@ class BotConfig(Base):
         nullable=False,
     )
 
+    symbol: Mapped[str] = mapped_column(String(32), default="XAUUSD+", nullable=False)
+    timeframe: Mapped[str] = mapped_column(String(8), default="M15", nullable=False)
+    bars_lookback: Mapped[int] = mapped_column(Integer, default=500, nullable=False)
+    risk_per_trade_pct: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+    max_open_positions: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    magic_number: Mapped[int] = mapped_column(Integer, default=202501, nullable=False)
+    rsi_swing_lookback: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+
     take_profit_pct: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
     stop_loss_pct: Mapped[float] = mapped_column(Float, default=0.5, nullable=False)
     trailing_stop_enabled: Mapped[bool] = mapped_column(
@@ -112,12 +120,14 @@ class TradePosition(Base):
         nullable=False,
     )
     ticket_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    symbol: Mapped[str] = mapped_column(String(32), default="XAUUSD", nullable=False)
+    symbol: Mapped[str] = mapped_column(String(32), default="XAUUSD+", nullable=False)
     side: Mapped[OrderSide] = mapped_column(Enum(OrderSide), nullable=False)
     volume: Mapped[float] = mapped_column(Float, nullable=False)
     entry_price: Mapped[float] = mapped_column(Float, nullable=False)
     current_tp: Mapped[float | None] = mapped_column(Float, nullable=True)
     current_sl: Mapped[float | None] = mapped_column(Float, nullable=True)
+    highest_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lowest_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     opened_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -139,7 +149,7 @@ class TradeHistory(Base):
         nullable=False,
     )
     ticket_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    symbol: Mapped[str] = mapped_column(String(32), default="XAUUSD", nullable=False)
+    symbol: Mapped[str] = mapped_column(String(32), default="XAUUSD+", nullable=False)
     side: Mapped[OrderSide] = mapped_column(Enum(OrderSide), nullable=False)
     volume: Mapped[float] = mapped_column(Float, nullable=False)
     entry_price: Mapped[float] = mapped_column(Float, nullable=False)

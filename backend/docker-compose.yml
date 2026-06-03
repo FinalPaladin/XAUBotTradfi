@@ -1,4 +1,21 @@
 services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: 123qwe
+      MYSQL_DATABASE: XAUBOT
+    ports:
+      - "3307:3306"
+    volumes:
+      - xau_bot_mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p123qwe"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
   backend:
     build: .
     ports:
@@ -6,11 +23,12 @@ services:
     environment:
       APP_NAME: XAUBot TradFi
       DEBUG: "false"
-      DATABASE_URL: sqlite:////app/data/xau_bot.db
+      DATABASE_URL: mysql+pymysql://root:123qwe@mysql:3306/XAUBOT?charset=utf8mb4
       CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
-    volumes:
-      - xau_bot_data:/app/data
+    depends_on:
+      mysql:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
-  xau_bot_data:
+  xau_bot_mysql:

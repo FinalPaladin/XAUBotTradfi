@@ -16,6 +16,13 @@ class BotConfigRead(ORMBase):
     id: int
     name: str
     status: BotStatus
+    symbol: str
+    timeframe: str
+    bars_lookback: int
+    risk_per_trade_pct: float
+    max_open_positions: int
+    magic_number: int
+    rsi_swing_lookback: int
     take_profit_pct: float
     stop_loss_pct: float
     trailing_stop_enabled: bool
@@ -37,8 +44,16 @@ class BotConfigRead(ORMBase):
 class BotConfigUpdate(BaseModel):
     """Partial update payload from React UI."""
 
+    id: int | None = None
     name: str | None = None
     status: BotStatus | None = None
+    symbol: str | None = None
+    timeframe: str | None = None
+    bars_lookback: int | None = Field(None, ge=50, le=5000)
+    risk_per_trade_pct: float | None = Field(None, ge=0.1, le=10)
+    max_open_positions: int | None = Field(None, ge=1, le=10)
+    magic_number: int | None = None
+    rsi_swing_lookback: int | None = Field(None, ge=2, le=20)
     take_profit_pct: float | None = Field(None, ge=0)
     stop_loss_pct: float | None = Field(None, ge=0)
     trailing_stop_enabled: bool | None = None
@@ -65,7 +80,21 @@ class TradePositionRead(ORMBase):
     entry_price: float
     current_tp: float | None
     current_sl: float | None
+    highest_price: float | None
+    lowest_price: float | None
     opened_at: datetime
+
+
+class StrategyResultRead(BaseModel):
+    name: str
+    score: float
+    raw: dict[str, object] = Field(default_factory=dict)
+
+
+class AggregatedSignalRead(BaseModel):
+    strategy_results: list[StrategyResultRead]
+    weighted_score: float
+    net_signal: int
 
 
 class TradeHistoryRead(ORMBase):
