@@ -3,6 +3,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
@@ -32,6 +33,20 @@ class Settings(BaseSettings):
     mt5_password: str | None = None
     mt5_server: str | None = None
     worker_tick_seconds: int = 5
+
+    @field_validator("mt5_login", mode="before")
+    @classmethod
+    def empty_login(cls, v: object) -> object:
+        if v == "" or v is None:
+            return None
+        return v
+
+    @field_validator("mt5_path", "mt5_password", "mt5_server", mode="before")
+    @classmethod
+    def empty_optional_str(cls, v: object) -> object:
+        if v == "":
+            return None
+        return v
 
     @property
     def cors_origin_list(self) -> list[str]:
