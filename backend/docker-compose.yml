@@ -24,10 +24,18 @@ services:
       APP_NAME: XAUBot TradFi
       DEBUG: "false"
       DATABASE_URL: mysql+pymysql://root:123qwe@mysql:3306/XAUBOT?charset=utf8mb4
-      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000,http://localhost
     depends_on:
       mysql:
         condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build: ../frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
     restart: unless-stopped
 
 volumes:

@@ -1,0 +1,22 @@
+import { Outlet } from "react-router-dom";
+import { AppSidebar } from "./AppSidebar";
+import { Settings } from "lucide-react";
+
+export function AppLayout() {
+  return (
+    <div className="flex min-h-screen">
+      <AppSidebar />
+      <div className="flex flex-1 flex-col">
+        <header className="flex h-14 items-center justify-between border-b bg-card px-6">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Settings className="h-4 w-4" />
+            <span>Bybit TradFi · XAUUSD</span>
+          </div>
+        </header>
+        <main className="flex-1 overflow-auto p-6">
+          <Outlet />
+        </main>
+      </div>
+    </div>
+  );
+}

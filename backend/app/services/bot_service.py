@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.models import BotConfig, BotStatus, LogLevel, SystemLog, TradeHistory, TradePosition
 from app.schemas import AggregatedSignalRead, BotConfigUpdate, StrategyResultRead
 from app.services.logging_service import log_message
@@ -81,20 +82,74 @@ class BotService:
             "last_check": datetime.now(timezone.utc).isoformat(),
         }
 
+    def list_history(self, limit: int = 500) -> list[TradeHistory]:
+        return list(
+            self.db.query(TradeHistory)
+            .order_by(TradeHistory.closed_at.desc())
+            .limit(limit)
+            .all()
+        )
+
+    def list_logs(
+        self,
+        *,
+        level: LogLevel | None = None,
+        limit: int = 200,
+    ) -> list[SystemLog]:
+        q = self.db.query(SystemLog).order_by(SystemLog.created_at.desc())
+        if level is not None:
+            q = q.filter(SystemLog.level == level)
+        return list(q.limit(limit).all())
+
+    def list_exchanges(self) -> list[dict[str, Any]]:
+        settings = get_settings()
+        meta = self.get_status_meta()
+        login_display = (
+            str(settings.mt5_login) if settings.mt5_login is not None else None
+        )
+        return [
+            {
+                "id": "mt5-bybit-tradfi",
+                "name": "Bybit TradFi (MT5)",
+                "platform": "MetaTrader 5",
+                "server": settings.mt5_server or "BybitTradFi-Real",
+                "login": login_display,
+                "connected": bool(meta.get("mt5_connected")),
+                "error": meta.get("mt5_error"),
+                "extra": {
+                    "mt5_path": settings.mt5_path,
+                    "account": meta.get("account"),
+                },
+            }
+        ]
+
     def get_dashboard(
         self,
         history_limit: int = 20,
     ) -> tuple[list[BotConfig], list[TradePosition], list[TradeHistory], dict]:
         bots = self.list_configs()
         positions = list(self.db.query(TradePosition).all())
-        history = (
-            self.db.query(TradeHistory)
-            .order_by(TradeHistory.closed_at.desc())
-            .limit(history_limit)
-            .all()
-        )
+        history = self.list_history(limit=history_limit)
         meta = self.get_status_meta()
+        symbols = {p.symbol for p in positions}
+        meta["symbol_ticks"] = self._fetch_symbol_ticks(symbols)
         return bots, positions, history, meta
+
+    def _fetch_symbol_ticks(self, symbols: set[str]) -> dict[str, float | None]:
+        if not symbols:
+            return {}
+        client = get_mt5_client()
+        status = client.initialize()
+        if not status.connected:
+            return {s: None for s in symbols}
+        ticks: dict[str, float | None] = {}
+        for symbol in symbols:
+            tick = client.tick(symbol)
+            if tick is None:
+                ticks[symbol] = None
+            else:
+                ticks[symbol] = (float(tick.bid) + float(tick.ask)) / 2
+        return ticks
 
     def compute_signals(self, bot_id: int) -> AggregatedSignalRead:
         bot = self.get_config(bot_id)

@@ -28,7 +28,7 @@ backend/data/*.db-journal
 *.log
 logs/
 
-# Frontend (future)
+# Frontend
 frontend/node_modules/
 frontend/dist/
 frontend/build/

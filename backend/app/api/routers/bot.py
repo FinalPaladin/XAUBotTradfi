@@ -4,13 +4,16 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import BotStatus
+from app.models import BotStatus, LogLevel
 from app.schemas import (
     AggregatedSignalRead,
     BotConfigRead,
     BotConfigUpdate,
     BotStatusResponse,
+    ExchangeConfigRead,
     MessageResponse,
+    SystemLogRead,
+    TradeHistoryRead,
 )
 from app.services.bot_service import BotService
 
@@ -33,6 +36,31 @@ def update_bot_config(
         return BotService(db).update_config(payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/history", response_model=list[TradeHistoryRead])
+def get_trade_history(
+    limit: int = 500,
+    db: Session = Depends(get_db),
+) -> list[TradeHistoryRead]:
+    """Lịch sử vị thế đã đóng (cho UI báo cáo)."""
+    return BotService(db).list_history(limit=min(limit, 2000))
+
+
+@router.get("/logs", response_model=list[SystemLogRead])
+def get_system_logs(
+    level: LogLevel | None = None,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+) -> list[SystemLogRead]:
+    """Log hệ thống (mặc định tất cả; UI lọc ERROR)."""
+    return BotService(db).list_logs(level=level, limit=min(limit, 1000))
+
+
+@router.get("/exchanges", response_model=list[ExchangeConfigRead])
+def get_exchanges(db: Session = Depends(get_db)) -> list[ExchangeConfigRead]:
+    """Thông tin kết nối sàn / broker (đọc từ env)."""
+    return BotService(db).list_exchanges()
 
 
 @router.get("/status", response_model=BotStatusResponse)

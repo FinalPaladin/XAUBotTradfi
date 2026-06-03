@@ -124,3 +124,25 @@ class BotStatusResponse(BaseModel):
 class MessageResponse(BaseModel):
     message: str
     detail: dict[str, Any] | None = None
+
+
+class SystemLogRead(ORMBase):
+    id: int
+    bot_id: int | None
+    level: LogLevel
+    source: str
+    message: str
+    created_at: datetime
+
+
+class ExchangeConfigRead(BaseModel):
+    """Exchange / broker connection info (from env, read-only for UI)."""
+
+    id: str
+    name: str
+    platform: str
+    server: str | None = None
+    login: str | None = None
+    connected: bool = False
+    error: str | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
