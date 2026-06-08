@@ -8,7 +8,6 @@ import {
   Server,
 } from "lucide-react";
 import { NavLink } from "react-router-dom";
-import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import { logout } from "@/lib/auth";
@@ -24,15 +23,18 @@ const navItems = [
 
 export function AppSidebar() {
   return (
-    <aside className="flex h-full w-60 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
+    <aside
+      className="flex h-screen min-h-screen w-60 shrink-0 flex-col border-r border-sidebar-border bg-sidebar font-[Inter,sans-serif] text-white"
+      style={{ fontFamily: "'Inter', sans-serif" }}
+    >
       <div className="px-5 py-6">
-        <p className="text-xs uppercase tracking-widest text-sidebar-primary">
+        <p className="text-xs font-medium uppercase tracking-widest text-white/75">
           XAUBot
         </p>
-        <h1 className="text-lg font-semibold">TradFi Console</h1>
+        <h1 className="text-lg font-semibold text-white">TradFi Console</h1>
       </div>
       <Separator className="bg-sidebar-border" />
-      <nav className="flex-1 space-y-1 p-3">
+      <nav className="flex-1 space-y-1 overflow-y-auto p-3">
         {navItems.map(({ to, icon: Icon, label }) => (
           <NavLink
             key={to}
@@ -40,10 +42,10 @@ export function AppSidebar() {
             end={to === "/"}
             className={({ isActive }) =>
               cn(
-                "flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors",
+                "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-white transition-colors",
                 isActive
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                  : "text-sidebar-foreground/80 hover:bg-sidebar-accent/60",
+                  ? "bg-white/20 text-white"
+                  : "text-white/85 hover:bg-white/10 hover:text-white",
               )
             }
           >
@@ -52,10 +54,10 @@ export function AppSidebar() {
           </NavLink>
         ))}
       </nav>
-      <div className="p-3">
-        <Button
-          variant="ghost"
-          className="w-full justify-start gap-2 text-sidebar-foreground hover:bg-sidebar-accent"
+      <div className="mt-auto border-t border-sidebar-border p-3">
+        <button
+          type="button"
+          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-white/90 transition-colors hover:bg-white/10 hover:text-white"
           onClick={() => {
             logout();
             window.location.href = "/login";
@@ -63,7 +65,7 @@ export function AppSidebar() {
         >
           <LogOut className="h-4 w-4" />
           Đăng xuất
-        </Button>
+        </button>
       </div>
     </aside>
   );

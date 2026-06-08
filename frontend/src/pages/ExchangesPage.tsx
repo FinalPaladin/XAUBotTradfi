@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -13,23 +14,36 @@ import type { ExchangeConfig } from "@/lib/types";
 export function ExchangesPage() {
   const [exchanges, setExchanges] = useState<ExchangeConfig[]>([]);
   const [loading, setLoading] = useState(true);
+  const [checking, setChecking] = useState(false);
+
+  const refreshMt5 = useCallback(async () => {
+    setChecking(true);
+    try {
+      setExchanges(await api.checkExchanges());
+    } finally {
+      setChecking(false);
+    }
+  }, []);
 
   useEffect(() => {
     api
       .getExchanges()
       .then(setExchanges)
       .finally(() => setLoading(false));
-    const id = setInterval(() => api.getExchanges().then(setExchanges), 30000);
-    return () => clearInterval(id);
   }, []);
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-2xl font-semibold">Cấu hình sàn</h2>
-        <p className="text-sm text-muted-foreground">
-          Kết nối MT5 / Bybit TradFi (đọc từ backend .env)
-        </p>
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-semibold">Cấu hình sàn</h2>
+          <p className="text-sm text-muted-foreground">
+            Cấu hình từ .env — bấm kiểm tra để test MT5 (~8s)
+          </p>
+        </div>
+        <Button onClick={refreshMt5} disabled={checking}>
+          {checking ? "Đang kiểm tra MT5…" : "Kiểm tra kết nối MT5"}
+        </Button>
       </div>
 
       {loading && (

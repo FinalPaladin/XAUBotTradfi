@@ -74,6 +74,29 @@ def _migrate_bot_config_columns() -> None:
             "ALTER TABLE bot_config ADD COLUMN rsi_swing_lookback INT NOT NULL DEFAULT 5"
         )
 
+    dca_columns: list[tuple[str, str]] = [
+        ("max_layers", "INT NOT NULL DEFAULT 5"),
+        ("isolated_leverage", "INT NOT NULL DEFAULT 50"),
+        ("base_equity_usd", "FLOAT NOT NULL DEFAULT 200.0"),
+        ("first_layer_notional_usd", "FLOAT NOT NULL DEFAULT 6750.0"),
+        ("dca_volume_multiplier", "FLOAT NOT NULL DEFAULT 1.35"),
+        ("layer_spacing_min", "FLOAT NOT NULL DEFAULT 5.0"),
+        ("layer_spacing_max", "FLOAT NOT NULL DEFAULT 7.0"),
+        ("basket_tp_min_usd", "FLOAT NOT NULL DEFAULT 2.0"),
+        ("basket_tp_max_usd", "FLOAT NOT NULL DEFAULT 5.0"),
+        ("single_tp_min_usd", "FLOAT NOT NULL DEFAULT 1.0"),
+        ("single_tp_max_usd", "FLOAT NOT NULL DEFAULT 2.0"),
+        ("single_tp_distance", "FLOAT NOT NULL DEFAULT 1.2"),
+        ("single_tp_min_usd", "FLOAT NOT NULL DEFAULT 1.0"),
+        ("single_tp_max_usd", "FLOAT NOT NULL DEFAULT 2.0"),
+        ("hard_stop_adverse_distance", "FLOAT NOT NULL DEFAULT 35.0"),
+        ("ema_period", "INT NOT NULL DEFAULT 21"),
+        ("ema_weight", "FLOAT NOT NULL DEFAULT 0.15"),
+    ]
+    for col, typedef in dca_columns:
+        if col not in existing:
+            alters.append(f"ALTER TABLE bot_config ADD COLUMN {col} {typedef}")
+
     pos_existing: set[str] = set()
     if "trade_positions" in insp.get_table_names():
         pos_existing = {c["name"] for c in insp.get_columns("trade_positions")}
@@ -81,6 +104,14 @@ def _migrate_bot_config_columns() -> None:
             alters.append("ALTER TABLE trade_positions ADD COLUMN highest_price FLOAT NULL")
         if "lowest_price" not in pos_existing:
             alters.append("ALTER TABLE trade_positions ADD COLUMN lowest_price FLOAT NULL")
+        if "layer_index" not in pos_existing:
+            alters.append(
+                "ALTER TABLE trade_positions ADD COLUMN layer_index INT NOT NULL DEFAULT 0"
+            )
+        if "basket_anchor_price" not in pos_existing:
+            alters.append(
+                "ALTER TABLE trade_positions ADD COLUMN basket_anchor_price FLOAT NULL"
+            )
 
     if not alters:
         return

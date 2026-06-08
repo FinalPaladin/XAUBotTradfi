@@ -59,8 +59,14 @@ def get_system_logs(
 
 @router.get("/exchanges", response_model=list[ExchangeConfigRead])
 def get_exchanges(db: Session = Depends(get_db)) -> list[ExchangeConfigRead]:
-    """Thông tin kết nối sàn / broker (đọc từ env)."""
-    return BotService(db).list_exchanges()
+    """Thông tin sàn từ .env (phản hồi ngay, không gọi MT5)."""
+    return BotService(db).list_exchanges(live=False)
+
+
+@router.get("/exchanges/check", response_model=list[ExchangeConfigRead])
+def check_exchanges(db: Session = Depends(get_db)) -> list[ExchangeConfigRead]:
+    """Kiểm tra kết nối MT5 thực tế (timeout ~8s)."""
+    return BotService(db).list_exchanges(live=True)
 
 
 @router.get("/status", response_model=BotStatusResponse)
@@ -88,6 +94,50 @@ def get_bot_signals(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/history/resync-pnl", response_model=MessageResponse)
+def resync_history_pnl(db: Session = Depends(get_db)) -> MessageResponse:
+    """Đồng bộ lại P&L lịch sử từ deal MT5 (khớp Exness)."""
+    try:
+        detail = BotService(db).resync_history_pnl_from_mt5()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return MessageResponse(
+        message="History P&L resynced from MT5",
+        detail=detail,
+    )
+
+
+@router.post("/positions/close-all", response_model=MessageResponse)
+def close_all_positions(db: Session = Depends(get_db)) -> MessageResponse:
+    """Đóng tất cả lệnh đang mở tại giá market (bot vẫn RUNNING)."""
+    try:
+        detail = BotService(db).close_all_open_positions()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return MessageResponse(
+        message="All open positions closed at market",
+        detail=detail,
+    )
+
+
+@router.post("/positions/{position_id}/close", response_model=MessageResponse)
+def close_single_position(
+    position_id: int,
+    db: Session = Depends(get_db),
+) -> MessageResponse:
+    """Đóng một lệnh tại giá market."""
+    try:
+        detail = BotService(db).close_position_by_id(position_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return MessageResponse(
+        message="Position closed at market",
+        detail=detail,
+    )
 
 
 @router.post("/{bot_id}/start", response_model=BotConfigRead)

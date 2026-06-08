@@ -1,10 +1,14 @@
-"""Evaluate open positions: HOLD, trailing modify, or close."""
+"""
+Đánh giá vị thế trong chế độ DCA Scalping.
+
+- 1 lớp: scalp TP qua basket_manager (logic chính) hoặc broker TP
+- > 1 lớp: KHÔNG đóng từng lệnh — orchestrator gọi evaluate_basket() + close_basket()
+"""
 
 from __future__ import annotations
 
 from app.models import BotConfig, OrderSide, TradePosition
-from app.trading.risk import trailing_sl_price
-from app.trading.types import AggregatedSignal, NetSignal, PositionAction, PositionDecision
+from app.trading.types import AggregatedSignal, PositionAction, PositionDecision
 
 
 def evaluate_position(
@@ -13,62 +17,25 @@ def evaluate_position(
     current_price: float,
     signal: AggregatedSignal,
 ) -> PositionDecision:
+    """
+    Giữ tương thích per-ticket khi cần; DCA multi-layer được xử lý ở orchestrator.
+
+    Với DCA scalping, trailing và signal-reversal per-ticket bị tắt
+    (trailing_stop_enabled=False mặc định trong seed mới).
+    """
     ticket = position.ticket_id
+    layer_index = getattr(position, "layer_index", 0) or 0
 
-    if position.side == OrderSide.BUY:
-        position.highest_price = max(
-            position.highest_price or position.entry_price, current_price
-        )
-        extreme = position.highest_price
-    else:
-        position.lowest_price = min(
-            position.lowest_price or position.entry_price, current_price
-        )
-        extreme = position.lowest_price
+    # Lớp DCA (>=1): không đóng riêng lẻ — chờ basket joint close
+    if layer_index >= 1:
+        return PositionDecision(PositionAction.HOLD, ticket)
 
-    sl = position.current_sl
+    # Lớp 1: broker TP backup nếu đã gắn trên MT5
     tp = position.current_tp
-
-    if sl is not None:
-        if position.side == OrderSide.BUY and current_price <= sl:
-            return PositionDecision(PositionAction.CLOSE_SL, ticket, close_reason="SL")
-        if position.side == OrderSide.SELL and current_price >= sl:
-            return PositionDecision(PositionAction.CLOSE_SL, ticket, close_reason="SL")
-
     if tp is not None:
         if position.side == OrderSide.BUY and current_price >= tp:
-            return PositionDecision(PositionAction.CLOSE_TP, ticket, close_reason="TP")
+            return PositionDecision(PositionAction.CLOSE_TP, ticket, close_reason="SCALP_TP")
         if position.side == OrderSide.SELL and current_price <= tp:
-            return PositionDecision(PositionAction.CLOSE_TP, ticket, close_reason="TP")
-
-    if config.trailing_stop_enabled:
-        new_sl = trailing_sl_price(
-            config, position.side, position.entry_price, extreme, sl
-        )
-        if new_sl is not None:
-            if sl is not None:
-                if position.side == OrderSide.BUY and current_price <= new_sl:
-                    return PositionDecision(
-                        PositionAction.CLOSE_TRAIL, ticket, close_reason="TRAIL"
-                    )
-                if position.side == OrderSide.SELL and current_price >= new_sl:
-                    return PositionDecision(
-                        PositionAction.CLOSE_TRAIL, ticket, close_reason="TRAIL"
-                    )
-            return PositionDecision(
-                PositionAction.MODIFY_TRAIL, ticket, new_sl=new_sl
-            )
-
-    opposite = (
-        position.side == OrderSide.BUY
-        and signal.net_signal == int(NetSignal.SELL)
-    ) or (
-        position.side == OrderSide.SELL
-        and signal.net_signal == int(NetSignal.BUY)
-    )
-    if opposite and abs(signal.weighted_score) >= config.signal_threshold:
-        return PositionDecision(
-            PositionAction.CLOSE_SIGNAL, ticket, close_reason="SIGNAL"
-        )
+            return PositionDecision(PositionAction.CLOSE_TP, ticket, close_reason="SCALP_TP")
 
     return PositionDecision(PositionAction.HOLD, ticket)

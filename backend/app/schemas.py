@@ -36,7 +36,22 @@ class BotConfigRead(ORMBase):
     rsi_overbought: float
     rsi_oversold: float
     rsi_weight: float
+    ema_period: int
+    ema_weight: float
     signal_threshold: float
+    max_layers: int = 5
+    isolated_leverage: int = 50
+    base_equity_usd: float = 200.0
+    first_layer_notional_usd: float = 6750.0
+    dca_volume_multiplier: float = 1.35
+    layer_spacing_min: float = 5.0
+    layer_spacing_max: float = 7.0
+    basket_tp_min_usd: float = 2.0
+    basket_tp_max_usd: float = 5.0
+    single_tp_min_usd: float = 1.0
+    single_tp_max_usd: float = 2.0
+    single_tp_distance: float = 1.2
+    hard_stop_adverse_distance: float = 35.0
     created_at: datetime
     updated_at: datetime
 
@@ -52,6 +67,19 @@ class BotConfigUpdate(BaseModel):
     bars_lookback: int | None = Field(None, ge=50, le=5000)
     risk_per_trade_pct: float | None = Field(None, ge=0.1, le=10)
     max_open_positions: int | None = Field(None, ge=1, le=10)
+    max_layers: int | None = Field(None, ge=1, le=10)
+    isolated_leverage: int | None = Field(None, ge=1, le=200)
+    base_equity_usd: float | None = Field(None, ge=10, le=100000)
+    first_layer_notional_usd: float | None = Field(None, ge=100, le=500000)
+    dca_volume_multiplier: float | None = Field(None, ge=1.0, le=3.0)
+    layer_spacing_min: float | None = Field(None, ge=0.5, le=50)
+    layer_spacing_max: float | None = Field(None, ge=0.5, le=50)
+    basket_tp_min_usd: float | None = Field(None, ge=0.1, le=1000)
+    basket_tp_max_usd: float | None = Field(None, ge=0.1, le=1000)
+    single_tp_min_usd: float | None = Field(None, ge=0.1, le=1000)
+    single_tp_max_usd: float | None = Field(None, ge=0.1, le=1000)
+    single_tp_distance: float | None = Field(None, ge=0.1, le=20)
+    hard_stop_adverse_distance: float | None = Field(None, ge=5, le=200)
     magic_number: int | None = None
     rsi_swing_lookback: int | None = Field(None, ge=2, le=20)
     take_profit_pct: float | None = Field(None, ge=0)
@@ -67,6 +95,8 @@ class BotConfigUpdate(BaseModel):
     rsi_overbought: float | None = None
     rsi_oversold: float | None = None
     rsi_weight: float | None = Field(None, ge=0, le=1)
+    ema_period: int | None = Field(None, ge=1)
+    ema_weight: float | None = Field(None, ge=0, le=1)
     signal_threshold: float | None = Field(None, ge=0, le=1)
 
 
@@ -82,6 +112,8 @@ class TradePositionRead(ORMBase):
     current_sl: float | None
     highest_price: float | None
     lowest_price: float | None
+    layer_index: int = 0
+    basket_anchor_price: float | None = None
     opened_at: datetime
 
 

@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     mt5_password: str | None = None
     mt5_server: str | None = None
     worker_tick_seconds: int = 5
+    mt5_connect_timeout_ms: int = 5000
 
     @field_validator("mt5_login", mode="before")
     @classmethod

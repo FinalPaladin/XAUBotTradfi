@@ -21,18 +21,26 @@ class MarketDataProvider:
         self._client = client or get_mt5_client()
 
     def fetch(self, config: BotConfig) -> pd.DataFrame:
-        status = self._client.initialize()
-        if not status.connected:
-            raise RuntimeError(status.error or "MT5 not connected")
-
-        rates = self._client.copy_rates(
+        return self.fetch_timeframe(
             config.symbol,
             config.timeframe,
             config.bars_lookback,
         )
+
+    def fetch_timeframe(
+        self,
+        symbol: str,
+        timeframe: str,
+        bars_lookback: int,
+    ) -> pd.DataFrame:
+        status = self._client.initialize()
+        if not status.connected:
+            raise RuntimeError(status.error or "MT5 not connected")
+
+        rates = self._client.copy_rates(symbol, timeframe, bars_lookback)
         df = rates_to_dataframe(rates)
         if df.empty:
-            raise RuntimeError(f"No rates for {config.symbol} {config.timeframe}")
+            raise RuntimeError(f"No rates for {symbol} {timeframe}")
         return df
 
     def current_price(self, symbol: str) -> float:

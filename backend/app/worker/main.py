@@ -12,6 +12,7 @@ from app.database import SessionLocal
 from app.models import BotConfig, BotStatus
 from app.services.mt5_client import get_mt5_client
 from app.services.trading_orchestrator import TradingOrchestrator
+from app.worker.tick_log import format_tick_log
 
 logging.basicConfig(
     level=logging.INFO,
@@ -58,7 +59,7 @@ def run_loop() -> None:
                 orchestrator = TradingOrchestrator(db)
                 for bot in bots:
                     result = orchestrator.run_tick(bot)
-                    logger.info("bot_id=%s result=%s", bot.id, result)
+                    logger.info("\n%s", format_tick_log(result))
 
         time.sleep(interval)
 

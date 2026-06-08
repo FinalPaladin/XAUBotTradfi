@@ -16,9 +16,14 @@ def evaluate(df: pd.DataFrame, config: BotConfig) -> StrategyResult:
     if data["st_direction"].isna().all():
         return StrategyResult("supertrend", 0.0, {"reason": "insufficient_data"})
 
-    direction = int(data["st_direction"].iloc[-1])
+    direction_raw = data["st_direction"].iloc[-1]
+    st_raw = data["st_value"].iloc[-1]
+    if pd.isna(direction_raw) or pd.isna(st_raw):
+        return StrategyResult("supertrend", 0.0, {"reason": "insufficient_data"})
+
+    direction = int(direction_raw)
     close = float(data["close"].iloc[-1])
-    st_val = float(data["st_value"].iloc[-1])
+    st_val = float(st_raw)
 
     score = 1.0 if direction == 1 else -1.0
     prev_dir = int(data["st_direction"].iloc[-2]) if len(data) > 1 else direction

@@ -13,6 +13,8 @@ import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
 import type { BotConfig } from "@/lib/types";
 
+const TIMEFRAMES = ["M1", "M5", "M15", "M30", "H1", "H4", "D1"] as const;
+
 export function BotConfigPage() {
   const [bot, setBot] = useState<BotConfig | null>(null);
   const [saving, setSaving] = useState(false);
@@ -83,7 +85,9 @@ export function BotConfigPage() {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 className="text-2xl font-semibold">Cấu hình Bot</h2>
-          <p className="text-sm text-muted-foreground">{bot.name}</p>
+          <p className="text-sm text-muted-foreground">
+            {bot.name} — Multi-layer DCA Scalping
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <Badge variant={bot.status === "RUNNING" ? "success" : "secondary"}>
@@ -115,21 +119,63 @@ export function BotConfigPage() {
             />
           </div>
           {num("symbol", "Symbol")}
-          {num("timeframe", "Khung thời gian")}
+          <div className="space-y-2">
+            <Label>Khung thời gian (scalping)</Label>
+            <select
+              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm"
+              value={bot.timeframe}
+              onChange={(e) => updateField("timeframe", e.target.value)}
+            >
+              {TIMEFRAMES.map((tf) => (
+                <option key={tf} value={tf}>
+                  {tf}
+                </option>
+              ))}
+            </select>
+          </div>
           {num("bars_lookback", "Bars lookback")}
-          {num("risk_per_trade_pct", "Risk % / lệnh")}
-          {num("max_open_positions", "Max lệnh mở")}
+          {num("risk_per_trade_pct", "Risk % / lệnh (legacy)")}
           {num("magic_number", "Magic number")}
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle>Risk &amp; TP/SL</CardTitle>
+          <CardTitle>Multi-layer DCA Scalping</CardTitle>
+          <CardDescription>
+            Bybit Master Trader style — tối đa {bot.max_layers ?? 5} lớp, đòn bẩy
+            isolated, Joint Close basket
+          </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {num("take_profit_pct", "Take profit %")}
-          {num("stop_loss_pct", "Stop loss %")}
+          {num("max_layers", "Max lớp DCA", "1")}
+          {num("max_open_positions", "Max lệnh mở (sync)", "1")}
+          {num("isolated_leverage", "Đòn bẩy isolated (x)", "1")}
+          {num("base_equity_usd", "Vốn gốc tham chiếu (USD)")}
+          {num("first_layer_notional_usd", "Notional lớp 1 (USD)")}
+          {num("dca_volume_multiplier", "Hệ số volume DCA (Martingale nén)", "0.01")}
+          {num("layer_spacing_min", "Khoảng cách nhồi DCA min (giá Vàng)")}
+          {num("layer_spacing_max", "Khoảng cách nhồi DCA max (giá Vàng)")}
+          {num("basket_tp_min_usd", "Joint TP min — gồng DCA (USD)", "0.1")}
+          {num("basket_tp_max_usd", "Joint TP max — gồng DCA (USD)", "0.1")}
+          {num("single_tp_min_usd", "Scalp TP min — thuận xu thế (USD)", "0.1")}
+          {num("single_tp_max_usd", "Scalp TP max — thuận xu thế (USD)", "0.1")}
+          {num("single_tp_distance", "Scalp TP fallback (giá Vàng)")}
+          {num("hard_stop_adverse_distance", "Hard stop adverse (giá Vàng)")}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Tín hiệu &amp; Scalping</CardTitle>
+          <CardDescription>
+            Ngưỡng vào lệnh và TP/SL legacy (lớp 1 có thể dùng broker TP)
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {num("signal_threshold", "Signal threshold", "0.01")}
+          {num("take_profit_pct", "Take profit % (legacy)")}
+          {num("stop_loss_pct", "Stop loss % (legacy, 0 = tắt)")}
           {num("trailing_stop_pct", "Trailing stop %")}
           <div className="flex items-end gap-2">
             <input
@@ -142,7 +188,6 @@ export function BotConfigPage() {
             />
             <Label htmlFor="trailing">Trailing stop</Label>
           </div>
-          {num("signal_threshold", "Signal threshold", "0.01")}
         </CardContent>
       </Card>
 
@@ -150,7 +195,7 @@ export function BotConfigPage() {
         <CardHeader>
           <CardTitle>Chiến lược (trọng số = 1.0)</CardTitle>
           <CardDescription>
-            Donchian + SuperTrend + RSI
+            Donchian + SuperTrend + RSI Midline + EMA21 — entry M15 weighted score
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -164,6 +209,8 @@ export function BotConfigPage() {
             {num("rsi_overbought", "RSI overbought")}
             {num("rsi_oversold", "RSI oversold")}
             {num("rsi_weight", "RSI weight", "0.01")}
+            {num("ema_period", "EMA period")}
+            {num("ema_weight", "EMA21 weight", "0.01")}
             {num("rsi_swing_lookback", "RSI swing lookback")}
           </div>
         </CardContent>

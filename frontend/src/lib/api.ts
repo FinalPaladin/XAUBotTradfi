@@ -3,6 +3,7 @@ import type {
   BotConfigUpdate,
   BotStatusResponse,
   ExchangeConfig,
+  MessageResponse,
   SystemLog,
   TradeHistory,
 } from "./types";
@@ -30,6 +31,8 @@ export const api = {
     return request<SystemLog[]>(`/api/bot/logs${q}`);
   },
   getExchanges: () => request<ExchangeConfig[]>("/api/bot/exchanges"),
+  checkExchanges: () =>
+    request<ExchangeConfig[]>("/api/bot/exchanges/check"),
   getConfigs: () => request<BotConfig[]>("/api/bot/config"),
   updateConfig: (payload: BotConfigUpdate) =>
     request<BotConfig>("/api/bot/config", {
@@ -40,4 +43,16 @@ export const api = {
     request<BotConfig>(`/api/bot/${id}/start`, { method: "POST" }),
   stopBot: (id: number) =>
     request<BotConfig>(`/api/bot/${id}/stop`, { method: "POST" }),
+  closePosition: (positionId: number) =>
+    request<MessageResponse>(`/api/bot/positions/${positionId}/close`, {
+      method: "POST",
+    }),
+  closeAllPositions: () =>
+    request<MessageResponse>("/api/bot/positions/close-all", {
+      method: "POST",
+    }),
+  resyncHistoryPnl: () =>
+    request<MessageResponse>("/api/bot/history/resync-pnl", {
+      method: "POST",
+    }),
 };

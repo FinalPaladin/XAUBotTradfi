@@ -51,10 +51,10 @@ class BotConfig(Base):
     )
 
     symbol: Mapped[str] = mapped_column(String(32), default="XAUUSD+", nullable=False)
-    timeframe: Mapped[str] = mapped_column(String(8), default="M15", nullable=False)
+    timeframe: Mapped[str] = mapped_column(String(8), default="M5", nullable=False)
     bars_lookback: Mapped[int] = mapped_column(Integer, default=500, nullable=False)
     risk_per_trade_pct: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
-    max_open_positions: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    max_open_positions: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
     magic_number: Mapped[int] = mapped_column(Integer, default=202501, nullable=False)
     rsi_swing_lookback: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
 
@@ -65,25 +65,50 @@ class BotConfig(Base):
     )
     trailing_stop_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # Multi-layer DCA Scalping (Bybit Master Trader style)
+    max_layers: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    isolated_leverage: Mapped[int] = mapped_column(Integer, default=50, nullable=False)
+    base_equity_usd: Mapped[float] = mapped_column(Float, default=200.0, nullable=False)
+    first_layer_notional_usd: Mapped[float] = mapped_column(
+        Float, default=6750.0, nullable=False
+    )
+    dca_volume_multiplier: Mapped[float] = mapped_column(
+        Float, default=1.35, nullable=False
+    )
+    layer_spacing_min: Mapped[float] = mapped_column(Float, default=5.0, nullable=False)
+    layer_spacing_max: Mapped[float] = mapped_column(Float, default=7.0, nullable=False)
+    basket_tp_min_usd: Mapped[float] = mapped_column(Float, default=2.0, nullable=False)
+    basket_tp_max_usd: Mapped[float] = mapped_column(Float, default=5.0, nullable=False)
+    single_tp_min_usd: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+    single_tp_max_usd: Mapped[float] = mapped_column(Float, default=2.0, nullable=False)
+    single_tp_distance: Mapped[float] = mapped_column(Float, default=1.2, nullable=False)
+    hard_stop_adverse_distance: Mapped[float] = mapped_column(
+        Float, default=35.0, nullable=False
+    )
+
     # Donchian channel strategy
     donchian_period: Mapped[int] = mapped_column(Integer, default=20, nullable=False)
-    donchian_weight: Mapped[float] = mapped_column(Float, default=0.25, nullable=False)
+    donchian_weight: Mapped[float] = mapped_column(Float, default=0.35, nullable=False)
 
     # SuperTrend strategy
     supertrend_period: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
     supertrend_multiplier: Mapped[float] = mapped_column(
         Float, default=3.0, nullable=False
     )
-    supertrend_weight: Mapped[float] = mapped_column(Float, default=0.25, nullable=False)
+    supertrend_weight: Mapped[float] = mapped_column(Float, default=0.30, nullable=False)
 
     # RSI strategy
     rsi_period: Mapped[int] = mapped_column(Integer, default=14, nullable=False)
     rsi_overbought: Mapped[float] = mapped_column(Float, default=70.0, nullable=False)
     rsi_oversold: Mapped[float] = mapped_column(Float, default=30.0, nullable=False)
-    rsi_weight: Mapped[float] = mapped_column(Float, default=0.25, nullable=False)
+    rsi_weight: Mapped[float] = mapped_column(Float, default=0.20, nullable=False)
+
+    # EMA trend bias (entry M15)
+    ema_period: Mapped[int] = mapped_column(Integer, default=21, nullable=False)
+    ema_weight: Mapped[float] = mapped_column(Float, default=0.15, nullable=False)
 
     # Combined signal gate
-    signal_threshold: Mapped[float] = mapped_column(Float, default=0.6, nullable=False)
+    signal_threshold: Mapped[float] = mapped_column(Float, default=0.65, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -128,6 +153,8 @@ class TradePosition(Base):
     current_sl: Mapped[float | None] = mapped_column(Float, nullable=True)
     highest_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     lowest_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    layer_index: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    basket_anchor_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     opened_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

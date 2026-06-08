@@ -26,7 +26,22 @@ export interface BotConfig {
   rsi_overbought: number;
   rsi_oversold: number;
   rsi_weight: number;
+  ema_period: number;
+  ema_weight: number;
   signal_threshold: number;
+  max_layers: number;
+  isolated_leverage: number;
+  base_equity_usd: number;
+  first_layer_notional_usd: number;
+  dca_volume_multiplier: number;
+  layer_spacing_min: number;
+  layer_spacing_max: number;
+  basket_tp_min_usd: number;
+  basket_tp_max_usd: number;
+  single_tp_min_usd: number;
+  single_tp_max_usd: number;
+  single_tp_distance: number;
+  hard_stop_adverse_distance: number;
   created_at: string;
   updated_at: string;
 }
@@ -43,6 +58,8 @@ export interface TradePosition {
   current_sl: number | null;
   highest_price: number | null;
   lowest_price: number | null;
+  layer_index: number;
+  basket_anchor_price: number | null;
   opened_at: string;
 }
 
@@ -70,6 +87,10 @@ export interface BotStatusResponse {
     mt5_error?: string | null;
     account?: Record<string, unknown> | null;
     symbol_ticks?: Record<string, number | null>;
+    position_live?: Record<
+      string,
+      { price_current: number; profit: number; swap?: number }
+    >;
     last_check?: string;
   };
 }
@@ -92,6 +113,11 @@ export interface ExchangeConfig {
   connected: boolean;
   error: string | null;
   extra: Record<string, unknown>;
+}
+
+export interface MessageResponse {
+  message: string;
+  detail?: Record<string, unknown> | null;
 }
 
 export type BotConfigUpdate = Partial<

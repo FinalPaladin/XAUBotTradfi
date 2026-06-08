@@ -1,7 +1,7 @@
 import type { OrderSide, TradeHistory, TradePosition } from "./types";
 
 export function positionNotional(volume: number, price: number) {
-  return volume * price;
+  return volume * price * 100;
 }
 
 export function unrealizedPnl(
@@ -18,15 +18,26 @@ export function unrealizedPnl(
 export function marketPrice(
   position: TradePosition,
   ticks?: Record<string, number | null>,
+  live?: Record<string, { price_current: number; profit: number } | undefined>,
 ): number | null {
+  const fromMt5 = live?.[position.ticket_id]?.price_current;
+  if (fromMt5 != null) return fromMt5;
+
   const tick = ticks?.[position.symbol];
   if (tick != null) return tick;
-  if (position.side === "BUY" && position.highest_price != null) {
-    return position.highest_price;
-  }
-  if (position.side === "SELL" && position.lowest_price != null) {
-    return position.lowest_price;
-  }
+
+  return null;
+}
+
+export function unrealizedPnlFromLive(
+  position: TradePosition,
+  live?: Record<
+    string,
+    { price_current: number; profit: number; swap?: number } | undefined
+  >,
+): number | null {
+  const p = live?.[position.ticket_id];
+  if (p != null) return p.profit + (p.swap ?? 0);
   return null;
 }
 
