@@ -5,8 +5,13 @@ import math
 import pytest
 
 from app.models import BotConfig, BotStatus
+from app.models import OrderSide
 from app.trading.risk import (
+    SCALP_TP_MULTIPLIER,
+    SCALP_VOLUME_MULTIPLIER,
+    build_layer_plan,
     calculate_fixed_lot_size,
+    calculate_layer_volume,
     capital_scale_factor,
     dynamic_first_layer_notional,
     resolve_basket_tp_min,
@@ -25,6 +30,7 @@ def config() -> BotConfig:
         first_layer_notional_usd=6750.0,
         basket_tp_min_usd=2.0,
         single_tp_min_usd=1.0,
+        single_tp_distance=1.2,
     )
 
 
@@ -51,3 +57,39 @@ def test_dynamic_notional_10k(config: BotConfig) -> None:
 
 def test_basket_tp_min_scales(config: BotConfig) -> None:
     assert resolve_basket_tp_min(config, 10_000) == 100.0
+
+
+def test_scalp_mode_halves_volume(config: BotConfig) -> None:
+    normal = calculate_layer_volume(config, 2400.0, 0, 10_000)
+    scalp = calculate_layer_volume(config, 2400.0, 0, 10_000, is_scalp_mode=True)
+    assert scalp == pytest.approx(normal * SCALP_VOLUME_MULTIPLIER)
+
+
+def test_scalp_mode_halves_tp_distance(
+    config: BotConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "app.trading.risk._clamp_volume",
+        lambda _symbol, volume: volume,
+    )
+    normal = build_layer_plan(
+        config,
+        OrderSide.BUY,
+        2400.0,
+        layer_index=0,
+        account_balance=10_000,
+        is_scalp_mode=False,
+    )
+    scalp = build_layer_plan(
+        config,
+        OrderSide.BUY,
+        2400.0,
+        layer_index=0,
+        account_balance=10_000,
+        is_scalp_mode=True,
+    )
+    assert normal is not None and scalp is not None
+    normal_dist = normal.tp_price - normal.entry_price
+    scalp_dist = scalp.tp_price - scalp.entry_price
+    assert scalp_dist == pytest.approx(normal_dist * SCALP_TP_MULTIPLIER)
+    assert "SCALP" in scalp.comment

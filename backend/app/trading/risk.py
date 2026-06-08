@@ -13,6 +13,9 @@ from app.models import BotConfig, OrderSide
 from app.services.mt5_client import get_mt5_client
 from app.trading.types import AggregatedSignal, NetSignal, OrderPlan
 
+SCALP_VOLUME_MULTIPLIER = 0.5
+SCALP_TP_MULTIPLIER = 0.5
+
 
 def resolve_account_balance(equity_fallback: float | None = None) -> float:
     """Số dư thực tế từ MT5; fallback equity nếu balance không có."""
@@ -130,15 +133,20 @@ def calculate_layer_volume(
     entry_price: float,
     layer_index: int,
     account_balance: float | None = None,
+    *,
+    is_scalp_mode: bool = False,
 ) -> float:
     """
     Volume cố định theo nấc vốn — không dùng đòn bẩy / Martingale.
 
     Mọi lớp DCA dùng cùng lot size tại thời điểm mở.
+    Scalp mode (lớp 1 khi H1 NEUTRAL): giảm 50% volume.
     """
     _ = entry_price, layer_index
     balance = account_balance if account_balance else resolve_account_balance()
     volume = calculate_fixed_lot_size(balance)
+    if is_scalp_mode:
+        volume *= SCALP_VOLUME_MULTIPLIER
     return _clamp_volume(config.symbol, volume)
 
 
@@ -149,6 +157,8 @@ def build_layer_plan(
     layer_index: int = 0,
     basket_anchor_price: float | None = None,
     account_balance: float | None = None,
+    *,
+    is_scalp_mode: bool = False,
 ) -> OrderPlan | None:
     """
     Tạo OrderPlan cho một lớp.
@@ -157,7 +167,25 @@ def build_layer_plan(
     Lớp 1+: không gắn SL/TP broker — thoát bằng Joint Close basket.
     """
     balance = account_balance if account_balance else resolve_account_balance()
-    volume = calculate_layer_volume(config, entry_price, layer_index, balance)
+    scalp = is_scalp_mode and layer_index == 0
+    base_volume = calculate_layer_volume(
+        config,
+        entry_price,
+        layer_index,
+        balance,
+        is_scalp_mode=False,
+    )
+    volume = (
+        calculate_layer_volume(
+            config,
+            entry_price,
+            layer_index,
+            balance,
+            is_scalp_mode=True,
+        )
+        if scalp
+        else base_volume
+    )
     if volume <= 0:
         return None
 
@@ -169,14 +197,23 @@ def build_layer_plan(
 
     if use_broker_sl_tp:
         tp_min_usd = resolve_single_tp_min(config, balance)
-        if volume > 0:
-            scalp_dist = max(tp_min_usd / (volume * 100.0), config.single_tp_distance)
+        if base_volume > 0:
+            scalp_dist = max(
+                tp_min_usd / (base_volume * 100.0),
+                config.single_tp_distance,
+            )
         else:
             scalp_dist = config.single_tp_distance
+        if scalp:
+            scalp_dist *= SCALP_TP_MULTIPLIER
         if side == OrderSide.BUY:
             tp_price = round(entry_price + scalp_dist, 2)
         else:
             tp_price = round(entry_price - scalp_dist, 2)
+
+    comment = f"XAUBot-L{layer_index + 1}"
+    if scalp:
+        comment = f"XAUBot-SCALP-L{layer_index + 1}"
 
     return OrderPlan(
         side=side,
@@ -186,7 +223,7 @@ def build_layer_plan(
         tp_price=tp_price,
         symbol=config.symbol,
         magic=config.magic_number,
-        comment=f"XAUBot-L{layer_index + 1}",
+        comment=comment,
         layer_index=layer_index,
         basket_anchor_price=anchor,
         use_broker_sl_tp=use_broker_sl_tp,
@@ -210,6 +247,7 @@ def build_order_plan(
         entry_price,
         layer_index=0,
         account_balance=balance,
+        is_scalp_mode=signal.is_scalp_mode,
     )
 
 

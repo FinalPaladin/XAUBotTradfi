@@ -68,10 +68,10 @@ def _build_tick_summary(
         "main_trend": trend_signal.main_trend.value,
         "trend_source": trend_signal.trend_source,
         "allowed": allowed_nets_label(meta.get("allowed_nets", [])),
-        "h4_score": trend_signal.h4_score,
         "h1_score": trend_signal.h1_score,
-        "h4_net": net_signal_label(meta.get("h4_net", 0)),
         "h1_net": net_signal_label(meta.get("h1_net", 0)),
+        "is_scalp_mode": trend_signal.is_scalp_mode,
+        "filter_log": meta.get("filter_log", ""),
         "entry_tf": trend_signal.entry_timeframe,
         "entry_score": trend_signal.entry_score,
         "entry_threshold": entry_bd["threshold"],
@@ -260,16 +260,26 @@ class TradingOrchestrator:
                 )
                 if plan:
                     self._executor.open_position(bot, plan)
+                    scalp_tag = " SCALP_MODE" if trend_signal.is_scalp_mode else ""
+                    filter_log = trend_signal.meta.get("filter_log", "")
                     log_message(
                         self.db,
                         f"Opened layer 1 {plan.side.value} {plan.volume} @ {price} "
                         f"(trend={trend_signal.main_trend.value}, "
-                        f"entry_tf={trend_signal.entry_timeframe})",
+                        f"entry_tf={trend_signal.entry_timeframe}{scalp_tag})",
                         bot_id=bot.id,
                         source="execution",
                     )
+                    if filter_log:
+                        log_message(
+                            self.db,
+                            filter_log,
+                            bot_id=bot.id,
+                            source="signal_engine",
+                        )
                     action_msg = (
                         f"MỞ LỚP 1 {plan.side.value} vol={plan.volume} @ {price:.2f}"
+                        f"{scalp_tag}"
                     )
 
             self.db.commit()

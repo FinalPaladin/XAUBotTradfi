@@ -49,6 +49,7 @@ class AggregatedSignal:
     strategy_results: list[StrategyResult]
     weighted_score: float
     net_signal: int
+    is_scalp_mode: bool = False
 
 
 @dataclass

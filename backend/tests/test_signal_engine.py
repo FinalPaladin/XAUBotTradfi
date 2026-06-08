@@ -7,7 +7,12 @@ import pandas as pd
 import pytest
 
 from app.models import BotConfig, BotStatus
-from app.trading.signal_engine import MainTrend, check_trend_and_entry_signal
+from app.trading.signal_engine import (
+    SCALP_ENTRY_THRESHOLD,
+    MainTrend,
+    _filter_entry_signal,
+    check_trend_and_entry_signal,
+)
 from app.trading.types import NetSignal, StrategyResult
 
 
@@ -47,22 +52,31 @@ def bot_config() -> BotConfig:
 
 def _mock_market(
     monkeypatch: pytest.MonkeyPatch,
-    h4_net: int,
     h1_net: int,
     entry_net: int,
+    *,
+    h1_score: float | None = None,
+    entry_score: float | None = None,
 ) -> MagicMock:
     from app.trading.types import AggregatedSignal
 
     market = MagicMock()
     market.fetch_timeframe.return_value = _make_ohlcv()
 
-    call_order = iter([h4_net, h1_net, entry_net])
+    call_idx = {"n": 0}
 
     def patched(_df, _config, **kwargs):
-        net = next(call_order)
+        idx = call_idx["n"]
+        call_idx["n"] += 1
+        if idx == 0:
+            net = h1_net
+            score = h1_score if h1_score is not None else float(net)
+        else:
+            net = entry_net
+            score = entry_score if entry_score is not None else float(net)
         return AggregatedSignal(
-            strategy_results=[StrategyResult("mock", float(net), {})],
-            weighted_score=float(net),
+            strategy_results=[StrategyResult("mock", score, {})],
+            weighted_score=score,
             net_signal=net,
         )
 
@@ -70,33 +84,103 @@ def _mock_market(
     return market
 
 
-def test_bearish_h4_h1_blocks_long_entry(
+def test_bearish_h1_blocks_long_entry(
     bot_config: BotConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     market = _mock_market(
         monkeypatch,
-        h4_net=int(NetSignal.SELL),
         h1_net=int(NetSignal.SELL),
         entry_net=int(NetSignal.BUY),
+        entry_score=0.9,
     )
     result = check_trend_and_entry_signal(bot_config, market)
     assert result.main_trend == MainTrend.BEARISH
-    assert result.trend_source == "H4"
-    assert result.entry_timeframe == "M15"
+    assert result.trend_source == "H1"
+    assert result.entry_timeframe == "M5"
     assert result.net_signal == int(NetSignal.HOLD)
+    assert result.is_scalp_mode is False
+    assert market.fetch_timeframe.call_count == 2
 
 
-def test_sideway_allows_both_directions(
+def test_bullish_h1_allows_long_entry(
     bot_config: BotConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     market = _mock_market(
         monkeypatch,
-        h4_net=int(NetSignal.BUY),
-        h1_net=int(NetSignal.SELL),
-        entry_net=int(NetSignal.SELL),
+        h1_net=int(NetSignal.BUY),
+        entry_net=int(NetSignal.BUY),
+        entry_score=0.7,
     )
     result = check_trend_and_entry_signal(bot_config, market)
-    assert result.main_trend == MainTrend.SIDEWAY
-    assert result.trend_source == "MIXED"
-    assert result.entry_timeframe == "M5"
+    assert result.main_trend == MainTrend.BULLISH
+    assert result.net_signal == int(NetSignal.BUY)
+    assert result.is_scalp_mode is False
+    assert "NORMAL - 100% Volume" in result.meta["filter_log"]
+
+
+def test_neutral_h1_blocks_moderate_score(
+    bot_config: BotConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    market = _mock_market(
+        monkeypatch,
+        h1_net=int(NetSignal.HOLD),
+        entry_net=int(NetSignal.BUY),
+        entry_score=0.75,
+    )
+    result = check_trend_and_entry_signal(bot_config, market)
+    assert result.main_trend == MainTrend.NEUTRAL
+    assert result.trend_source == "NONE"
+    assert result.net_signal == int(NetSignal.HOLD)
+    assert result.is_scalp_mode is False
+
+
+def test_neutral_h1_scalp_override_long(
+    bot_config: BotConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    market = _mock_market(
+        monkeypatch,
+        h1_net=int(NetSignal.HOLD),
+        entry_net=int(NetSignal.BUY),
+        entry_score=0.85,
+    )
+    result = check_trend_and_entry_signal(bot_config, market)
+    assert result.main_trend == MainTrend.NEUTRAL
+    assert result.net_signal == int(NetSignal.BUY)
+    assert result.is_scalp_mode is True
+    assert "SCALP MODE - 50% Volume" in result.meta["filter_log"]
+
+
+def test_neutral_h1_scalp_override_short(
+    bot_config: BotConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    market = _mock_market(
+        monkeypatch,
+        h1_net=int(NetSignal.HOLD),
+        entry_net=int(NetSignal.SELL),
+        entry_score=-0.85,
+    )
+    result = check_trend_and_entry_signal(bot_config, market)
     assert result.net_signal == int(NetSignal.SELL)
+    assert result.is_scalp_mode is True
+
+
+def test_filter_entry_signal_neutral_threshold() -> None:
+    net, scalp, log = _filter_entry_signal(
+        int(NetSignal.BUY),
+        SCALP_ENTRY_THRESHOLD - 0.01,
+        set(),
+        MainTrend.NEUTRAL,
+    )
+    assert net == int(NetSignal.HOLD)
+    assert scalp is False
+    assert "BLOCKED" in log
+
+    net, scalp, log = _filter_entry_signal(
+        int(NetSignal.BUY),
+        SCALP_ENTRY_THRESHOLD,
+        set(),
+        MainTrend.NEUTRAL,
+    )
+    assert net == int(NetSignal.BUY)
+    assert scalp is True
+    assert "OVERRIDE" in log
