@@ -328,6 +328,33 @@ def should_open_initial_layer(
     return open_count == 0 and signal.net_signal != int(NetSignal.HOLD)
 
 
+def should_open_reversal_hedge_layer(
+    signal: AggregatedSignal,
+    positions: list[TradePosition],
+    *,
+    is_scalp_mode: bool,
+) -> bool:
+    """
+    Mở lệnh ngược chiều basket đang giữ khi reversal đạt ngưỡng (scalp).
+
+    Ví dụ: đang SHORT + tín hiệu LONG mạnh → mở LONG hedge bắt đáy.
+    """
+    if not is_scalp_mode or signal.net_signal == int(NetSignal.HOLD):
+        return False
+
+    target_side = (
+        OrderSide.BUY
+        if signal.net_signal == int(NetSignal.BUY)
+        else OrderSide.SELL
+    )
+    existing_sides = {p.side for p in positions}
+    if not existing_sides or target_side in existing_sides:
+        return False
+
+    opposite = OrderSide.SELL if target_side == OrderSide.BUY else OrderSide.BUY
+    return opposite in existing_sides
+
+
 def basket_side_from_signal(signal: AggregatedSignal) -> OrderSide | None:
     if signal.net_signal == int(NetSignal.BUY):
         return OrderSide.BUY

@@ -16,8 +16,9 @@ from app.trading.basket_manager import (
     check_joint_take_profit,
     check_single_layer_scalp_tp,
     should_add_dca_layer,
+    should_open_reversal_hedge_layer,
 )
-from app.trading.types import AggregatedSignal, StrategyResult
+from app.trading.types import AggregatedSignal, NetSignal, StrategyResult
 
 
 @pytest.fixture
@@ -104,6 +105,57 @@ def test_should_add_dca_layer_spacing(dca_config: BotConfig) -> None:
 def test_calculate_adverse_distance_buy(dca_config: BotConfig) -> None:
     basket = _basket_buy([(2650.0, 0.02)])
     assert calculate_adverse_distance(basket, 2640.0) == 10.0
+
+
+def test_reversal_hedge_allows_long_while_short_open() -> None:
+    class MockPos:
+        def __init__(self, side: OrderSide):
+            self.side = side
+
+    signal = AggregatedSignal(
+        strategy_results=[],
+        weighted_score=0.85,
+        net_signal=int(NetSignal.BUY),
+        is_scalp_mode=True,
+    )
+    positions = [MockPos(OrderSide.SELL)]
+    assert should_open_reversal_hedge_layer(
+        signal, positions, is_scalp_mode=True
+    )
+
+
+def test_reversal_hedge_blocked_without_scalp_mode() -> None:
+    class MockPos:
+        def __init__(self, side: OrderSide):
+            self.side = side
+
+    signal = AggregatedSignal(
+        strategy_results=[],
+        weighted_score=0.85,
+        net_signal=int(NetSignal.BUY),
+        is_scalp_mode=True,
+    )
+    positions = [MockPos(OrderSide.SELL)]
+    assert not should_open_reversal_hedge_layer(
+        signal, positions, is_scalp_mode=False
+    )
+
+
+def test_reversal_hedge_blocked_when_long_already_open() -> None:
+    class MockPos:
+        def __init__(self, side: OrderSide):
+            self.side = side
+
+    signal = AggregatedSignal(
+        strategy_results=[],
+        weighted_score=0.85,
+        net_signal=int(NetSignal.BUY),
+        is_scalp_mode=True,
+    )
+    positions = [MockPos(OrderSide.SELL), MockPos(OrderSide.BUY)]
+    assert not should_open_reversal_hedge_layer(
+        signal, positions, is_scalp_mode=True
+    )
 
 
 def test_build_position_basket_from_mock_positions() -> None:

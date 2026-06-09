@@ -6,7 +6,7 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from app.models import BotConfig, BotStatus, LogLevel, TradePosition
+from app.models import BotConfig, BotStatus, LogLevel, OrderSide, TradePosition
 from app.services.logging_service import log_message
 from app.services.mt5_client import get_mt5_client
 from app.trading.basket_manager import (
@@ -14,6 +14,7 @@ from app.trading.basket_manager import (
     evaluate_basket,
     should_add_dca_layer,
     should_open_initial_layer,
+    should_open_reversal_hedge_layer,
 )
 from app.trading.drawdown_guard import (
     evaluate_drawdown,
@@ -180,21 +181,28 @@ class TradingOrchestrator:
                         )
                     }
 
-            basket = build_position_basket(open_positions)
+            max_layers = bot.max_layers or bot.max_open_positions
+            for side in (OrderSide.BUY, OrderSide.SELL):
+                side_positions = [p for p in open_positions if p.side == side]
+                if not side_positions:
+                    continue
 
-            if basket is not None:
+                basket = build_position_basket(side_positions)
+                if basket is None:
+                    continue
+
                 decision = evaluate_basket(
                     bot, basket, price, signal, account_balance
                 )
 
                 if decision.action != BasketAction.HOLD:
                     reason = decision.close_reason or decision.action.value
-                    self._executor.close_basket(bot, open_positions, reason)
+                    self._executor.close_basket(bot, side_positions, reason)
                     pnl = decision.meta.get("net_pnl_usd")
                     log_message(
                         self.db,
-                        f"Joint close {basket.layer_count} layers reason={reason} "
-                        f"pnl={pnl} USD",
+                        f"Joint close {basket.layer_count} {side.value} layers "
+                        f"reason={reason} pnl={pnl} USD",
                         bot_id=bot.id,
                         source="execution",
                     )
@@ -202,13 +210,13 @@ class TradingOrchestrator:
                     return {
                         "summary": make_summary(
                             action=(
-                                f"JOINT CLOSE {basket.layer_count} lớp — "
+                                f"JOINT CLOSE {basket.layer_count} {side.value} — "
                                 f"{reason} P&L={pnl} USD"
                             )
                         )
                     }
 
-                for pos in open_positions:
+                for pos in side_positions:
                     pos_decision = evaluate_position(bot, pos, price, signal)
                     if pos_decision.action != PositionAction.HOLD:
                         self._apply_decision(bot, pos, pos_decision, price)
@@ -219,8 +227,10 @@ class TradingOrchestrator:
                             )
                         }
 
-                max_layers = bot.max_layers or bot.max_open_positions
-                if should_add_dca_layer(bot, basket, price) and basket.layer_count < max_layers:
+                if (
+                    should_add_dca_layer(bot, basket, price)
+                    and basket.layer_count < max_layers
+                ):
                     next_layer = basket.layer_count
                     plan = build_layer_plan(
                         bot,
@@ -247,10 +257,42 @@ class TradingOrchestrator:
                     self.db.commit()
                     return {"summary": make_summary(action=action_msg)}
 
-                self.db.commit()
-                return {"summary": make_summary()}
-
             action_msg = None
+            if should_open_reversal_hedge_layer(
+                signal,
+                open_positions,
+                is_scalp_mode=trend_signal.is_scalp_mode,
+            ):
+                plan = build_order_plan(
+                    bot,
+                    signal,
+                    price,
+                    equity=account_balance,
+                )
+                if plan:
+                    self._executor.open_position(bot, plan)
+                    filter_log = trend_signal.meta.get("filter_log", "")
+                    log_message(
+                        self.db,
+                        f"Opened REVERSAL HEDGE {plan.side.value} {plan.volume} "
+                        f"@ {price} (opposite basket active)",
+                        bot_id=bot.id,
+                        source="execution",
+                    )
+                    if filter_log:
+                        log_message(
+                            self.db,
+                            filter_log,
+                            bot_id=bot.id,
+                            source="signal_engine",
+                        )
+                    action_msg = (
+                        f"MỞ HEDGE {plan.side.value} vol={plan.volume} "
+                        f"@ {price:.2f} REVERSAL"
+                    )
+                    self.db.commit()
+                    return {"summary": make_summary(action=action_msg)}
+
             if should_open_initial_layer(signal, open_count):
                 plan = build_order_plan(
                     bot,

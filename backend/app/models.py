@@ -168,7 +168,10 @@ class TradeHistory(Base):
     """Closed trades for reporting and UI charts."""
 
     __tablename__ = "trade_history"
-    __table_args__ = (Index("ix_trade_history_closed_at", "closed_at"),)
+    __table_args__ = (
+        Index("ix_trade_history_closed_at", "closed_at"),
+        Index("ix_trade_history_bot_ticket", "bot_id", "ticket_id", unique=True),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     bot_id: Mapped[int] = mapped_column(

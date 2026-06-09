@@ -109,6 +109,7 @@ def test_breakdown_formula_with_atr_dampen() -> None:
     bd = breakdown_weighted_score(config, results, include_rsi=True, atr_factor=0.5)
 
     assert bd["weighted_score"] == 0.5
+    assert bd["threshold"] == 0.325
 
     assert "ATR dampen" in bd["formula"]
 

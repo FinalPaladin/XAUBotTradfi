@@ -104,6 +104,40 @@ def test_close_still_raises_when_mt5_reports_missing_but_position_open(
     assert db.query(TradePosition).count() == 1
 
 
+def test_write_closed_history_skips_duplicate_ticket(db: Session) -> None:
+    pos = _add_position(db)
+    bot = db.get(BotConfig, 1)
+    assert bot is not None
+
+    existing = TradeHistory(
+        bot_id=bot.id,
+        ticket_id=pos.ticket_id,
+        symbol=pos.symbol,
+        side=pos.side,
+        volume=pos.volume,
+        entry_price=4300.0,
+        exit_price=4290.0,
+        profit_loss=-20.0,
+        close_reason="BASKET_TP",
+        opened_at=pos.opened_at,
+        closed_at=datetime.now(timezone.utc),
+    )
+    db.add(existing)
+    db.commit()
+
+    client = FakeMT5Client(
+        history_exit=4295.0,
+        history_pnl=-10.0,
+    )
+    executor = OrderExecutor(db, client=client)
+    history = executor.close_position(bot, pos, "BASKET_TP")
+
+    assert db.query(TradeHistory).count() == 1
+    assert db.query(TradePosition).count() == 0
+    assert history.id == existing.id
+    assert history.profit_loss == -20.0
+
+
 def test_close_uses_fill_when_mt5_close_succeeds(db: Session) -> None:
     pos = _add_position(db)
     bot = db.get(BotConfig, 1)

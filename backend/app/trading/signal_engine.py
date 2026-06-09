@@ -60,48 +60,61 @@ def _net_to_trend(net: int) -> MainTrend | None:
 
 
 def _resolve_main_trend(h1_net: int) -> tuple[MainTrend, str, set[int]]:
-    """Xác định xu hướng chính từ H1 và chiều được phép giao dịch."""
+    """Xác định xu hướng chính từ H1. Cả hai chiều đều có thể giao dịch (rule khác nhau)."""
     h1_trend = _net_to_trend(h1_net)
+    both = {int(NetSignal.BUY), int(NetSignal.SELL)}
 
     if h1_trend == MainTrend.BULLISH:
-        return MainTrend.BULLISH, "H1", {int(NetSignal.BUY)}
+        return MainTrend.BULLISH, "H1", both
     if h1_trend == MainTrend.BEARISH:
-        return MainTrend.BEARISH, "H1", {int(NetSignal.SELL)}
+        return MainTrend.BEARISH, "H1", both
     return MainTrend.NEUTRAL, "NONE", set()
 
 
 def _filter_entry_signal(
     entry_net: int,
     entry_score: float,
-    allowed_nets: set[int],
     main_trend: MainTrend,
+    *,
+    entry_threshold: float,
 ) -> tuple[int, bool, str]:
     """
     Lọc tín hiệu M5 theo xu hướng H1.
 
-    - H1 rõ (LONG/SHORT): cho phép M5 cùng chiều nếu đạt ngưỡng chuẩn (0.65).
-    - H1 NEUTRAL: chỉ cho phép khi điểm M5 cực cao (>= 0.8 / <= -0.8) → SCALP MODE.
+    - H1 BULLISH: LONG bình thường; SHORT đảo chiều khi >= entry_threshold.
+    - H1 BEARISH: SHORT bình thường; LONG bắt đáy khi >= entry_threshold.
+    - H1 NEUTRAL: scalp mode khi điểm M5 cực cao (>= 0.8 / <= -0.8).
     """
     if main_trend == MainTrend.BULLISH:
-        if entry_net in allowed_nets:
+        if entry_net == int(NetSignal.BUY):
             return entry_net, False, (
                 f"H1 BULLISH | M5 Score: {entry_score:+.2f} "
                 f"-> Allowed LONG (NORMAL - 100% Volume)"
             )
+        if entry_net == int(NetSignal.SELL) and entry_score <= -entry_threshold:
+            return entry_net, True, (
+                f"H1 BULLISH | M5 Score: {entry_score:+.2f} "
+                f"-> Allowed SHORT (REVERSAL - 50% Volume)"
+            )
         return int(NetSignal.HOLD), False, (
             f"H1 BULLISH | M5 Score: {entry_score:+.2f} "
-            f"-> BLOCKED (counter-trend or below threshold)"
+            f"-> BLOCKED (weak counter-trend or below threshold)"
         )
 
     if main_trend == MainTrend.BEARISH:
-        if entry_net in allowed_nets:
+        if entry_net == int(NetSignal.SELL):
             return entry_net, False, (
                 f"H1 BEARISH | M5 Score: {entry_score:+.2f} "
                 f"-> Allowed SHORT (NORMAL - 100% Volume)"
             )
+        if entry_net == int(NetSignal.BUY) and entry_score >= entry_threshold:
+            return entry_net, True, (
+                f"H1 BEARISH | M5 Score: {entry_score:+.2f} "
+                f"-> Allowed LONG (REVERSAL - 50% Volume)"
+            )
         return int(NetSignal.HOLD), False, (
             f"H1 BEARISH | M5 Score: {entry_score:+.2f} "
-            f"-> BLOCKED (counter-trend or below threshold)"
+            f"-> BLOCKED (weak counter-trend or below threshold)"
         )
 
     if entry_score >= SCALP_ENTRY_THRESHOLD:
@@ -132,7 +145,7 @@ def check_trend_and_entry_signal(
         Donchian + SuperTrend trên H1 (không dùng RSI/EMA).
 
     Bước 2 — Entry (M5):
-        Donchian, SuperTrend, RSI, EMA21 + ATR dampen.
+        Donchian, SuperTrend, RSI, EMA21 + ATR dampen (ngưỡng scale theo atr_factor).
     """
     provider = market or MarketDataProvider()
     lookback = config.bars_lookback
@@ -151,8 +164,8 @@ def check_trend_and_entry_signal(
     final_net, is_scalp_mode, filter_log = _filter_entry_signal(
         entry_signal.net_signal,
         entry_signal.weighted_score,
-        allowed_nets,
         main_trend,
+        entry_threshold=config.signal_threshold,
     )
 
     meta = {

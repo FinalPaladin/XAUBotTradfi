@@ -120,6 +120,44 @@ def _migrate_bot_config_columns() -> None:
             conn.execute(text(stmt))
 
 
+def _migrate_trade_history_dedupe() -> None:
+    """Remove duplicate history rows and add unique (bot_id, ticket_id) index."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if "trade_history" not in insp.get_table_names():
+        return
+
+    dialect = engine.dialect.name
+    indexes = {idx["name"] for idx in insp.get_indexes("trade_history")}
+    with engine.begin() as conn:
+        if dialect == "mysql":
+            conn.execute(
+                text(
+                    "DELETE t1 FROM trade_history t1 "
+                    "INNER JOIN trade_history t2 "
+                    "ON t1.bot_id = t2.bot_id AND t1.ticket_id = t2.ticket_id "
+                    "AND t1.id > t2.id"
+                )
+            )
+        elif dialect == "sqlite":
+            conn.execute(
+                text(
+                    "DELETE FROM trade_history WHERE id NOT IN ("
+                    "SELECT MIN(id) FROM trade_history "
+                    "GROUP BY bot_id, ticket_id)"
+                )
+            )
+
+        if "ix_trade_history_bot_ticket" not in indexes:
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX ix_trade_history_bot_ticket "
+                    "ON trade_history (bot_id, ticket_id)"
+                )
+            )
+
+
 def init_db() -> None:
     """Create tables if missing and seed default bot config when empty."""
     from app import models  # noqa: F401 — register models with Base.metadata
@@ -127,6 +165,7 @@ def init_db() -> None:
 
     Base.metadata.create_all(bind=engine)
     _migrate_bot_config_columns()
+    _migrate_trade_history_dedupe()
     with SessionLocal() as db:
         if seed_if_empty(db):
             db.commit()

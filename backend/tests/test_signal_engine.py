@@ -84,7 +84,7 @@ def _mock_market(
     return market
 
 
-def test_bearish_h1_blocks_long_entry(
+def test_bearish_h1_allows_strong_reversal_long(
     bot_config: BotConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     market = _mock_market(
@@ -97,9 +97,40 @@ def test_bearish_h1_blocks_long_entry(
     assert result.main_trend == MainTrend.BEARISH
     assert result.trend_source == "H1"
     assert result.entry_timeframe == "M5"
+    assert result.net_signal == int(NetSignal.BUY)
+    assert result.is_scalp_mode is True
+    assert "REVERSAL - 50% Volume" in result.meta["filter_log"]
+    assert market.fetch_timeframe.call_count == 2
+
+
+def test_bearish_h1_allows_reversal_long_at_threshold(
+    bot_config: BotConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    market = _mock_market(
+        monkeypatch,
+        h1_net=int(NetSignal.SELL),
+        entry_net=int(NetSignal.BUY),
+        entry_score=0.65,
+    )
+    result = check_trend_and_entry_signal(bot_config, market)
+    assert result.net_signal == int(NetSignal.BUY)
+    assert result.is_scalp_mode is True
+    assert "REVERSAL" in result.meta["filter_log"]
+
+
+def test_bearish_h1_blocks_weak_reversal_long(
+    bot_config: BotConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    market = _mock_market(
+        monkeypatch,
+        h1_net=int(NetSignal.SELL),
+        entry_net=int(NetSignal.BUY),
+        entry_score=0.6,
+    )
+    result = check_trend_and_entry_signal(bot_config, market)
     assert result.net_signal == int(NetSignal.HOLD)
     assert result.is_scalp_mode is False
-    assert market.fetch_timeframe.call_count == 2
+    assert "weak counter-trend" in result.meta["filter_log"]
 
 
 def test_bullish_h1_allows_long_entry(
@@ -164,12 +195,36 @@ def test_neutral_h1_scalp_override_short(
     assert result.is_scalp_mode is True
 
 
+def test_bullish_h1_allows_strong_reversal_short() -> None:
+    net, scalp, log = _filter_entry_signal(
+        int(NetSignal.SELL),
+        -0.65,
+        MainTrend.BULLISH,
+        entry_threshold=0.65,
+    )
+    assert net == int(NetSignal.SELL)
+    assert scalp is True
+    assert "REVERSAL" in log
+
+
+def test_bullish_h1_blocks_weak_reversal_short() -> None:
+    net, scalp, log = _filter_entry_signal(
+        int(NetSignal.SELL),
+        -0.6,
+        MainTrend.BULLISH,
+        entry_threshold=0.65,
+    )
+    assert net == int(NetSignal.HOLD)
+    assert scalp is False
+    assert "weak counter-trend" in log
+
+
 def test_filter_entry_signal_neutral_threshold() -> None:
     net, scalp, log = _filter_entry_signal(
         int(NetSignal.BUY),
         SCALP_ENTRY_THRESHOLD - 0.01,
-        set(),
         MainTrend.NEUTRAL,
+        entry_threshold=0.65,
     )
     assert net == int(NetSignal.HOLD)
     assert scalp is False
@@ -178,8 +233,8 @@ def test_filter_entry_signal_neutral_threshold() -> None:
     net, scalp, log = _filter_entry_signal(
         int(NetSignal.BUY),
         SCALP_ENTRY_THRESHOLD,
-        set(),
         MainTrend.NEUTRAL,
+        entry_threshold=0.65,
     )
     assert net == int(NetSignal.BUY)
     assert scalp is True

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   LogPnlCell,
@@ -29,6 +30,7 @@ import { formatLogDateTime, formatLogNumber } from "@/lib/utils";
 export function HistoryPage() {
   const [rows, setRows] = useState<TradeHistory[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [message, setMessage] = useState("");
 
@@ -44,6 +46,18 @@ export function HistoryPage() {
   useEffect(() => {
     loadHistory().finally(() => setLoading(false));
   }, []);
+
+  async function handleRefresh() {
+    setRefreshing(true);
+    setMessage("");
+    try {
+      await loadHistory();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : "Tải lại thất bại");
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   async function handleResync() {
     setSyncing(true);
@@ -69,9 +83,21 @@ export function HistoryPage() {
             Lệnh đã đóng — P&amp;L lấy từ deal MT5 (khớp Exness)
           </p>
         </div>
-        <Button variant="outline" disabled={syncing} onClick={handleResync}>
-          {syncing ? "Đang đồng bộ…" : "Đồng bộ P&L từ Exness"}
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            disabled={loading || refreshing || syncing}
+            onClick={handleRefresh}
+          >
+            <RefreshCw
+              className={`mr-2 size-4 ${refreshing ? "animate-spin" : ""}`}
+            />
+            {refreshing ? "Đang tải…" : "Làm mới"}
+          </Button>
+          <Button variant="outline" disabled={syncing} onClick={handleResync}>
+            {syncing ? "Đang đồng bộ…" : "Đồng bộ P&L từ Exness"}
+          </Button>
+        </div>
       </div>
 
       {message && (

@@ -96,6 +96,23 @@ class OrderExecutor:
         exit_px: float,
         pnl: float,
     ) -> TradeHistory:
+        existing = (
+            self.db.query(TradeHistory)
+            .filter(
+                TradeHistory.bot_id == bot.id,
+                TradeHistory.ticket_id == position.ticket_id,
+            )
+            .first()
+        )
+        if existing is not None:
+            logger.warning(
+                "History already exists ticket=%s — skipping duplicate write",
+                position.ticket_id,
+            )
+            self.db.delete(position)
+            self.db.flush()
+            return existing
+
         history = TradeHistory(
             bot_id=bot.id,
             ticket_id=position.ticket_id,

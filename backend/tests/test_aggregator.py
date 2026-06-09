@@ -278,6 +278,6 @@ def test_atr_filter_halves_score(
 
     assert result.weighted_score == 0.5
 
-    assert result.net_signal == 0
+    assert result.net_signal == 1
 
 
