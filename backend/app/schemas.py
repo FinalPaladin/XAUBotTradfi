@@ -144,6 +144,17 @@ class TradeHistoryRead(ORMBase):
     closed_at: datetime
 
 
+class TradeHistoryPageRead(BaseModel):
+    """Paginated trade history for UI filters and search."""
+
+    items: list[TradeHistoryRead]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+    total_pnl: float
+
+
 class BotStatusResponse(BaseModel):
     """Aggregated status for dashboard."""
 

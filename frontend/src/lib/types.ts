@@ -78,6 +78,23 @@ export interface TradeHistory {
   closed_at: string;
 }
 
+export interface TradeHistoryPage {
+  items: TradeHistory[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+  total_pnl: number;
+}
+
+export interface HistoryQuery {
+  days?: number;
+  side?: OrderSide;
+  q?: string;
+  page?: number;
+  page_size?: number;
+}
+
 export interface BotStatusResponse {
   bots: BotConfig[];
   open_positions: TradePosition[];

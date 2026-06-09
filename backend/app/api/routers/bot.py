@@ -1,10 +1,10 @@
 """Bot configuration and control endpoints."""
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import BotStatus, LogLevel
+from app.models import BotStatus, LogLevel, OrderSide
 from app.schemas import (
     AggregatedSignalRead,
     BotConfigRead,
@@ -13,7 +13,7 @@ from app.schemas import (
     ExchangeConfigRead,
     MessageResponse,
     SystemLogRead,
-    TradeHistoryRead,
+    TradeHistoryPageRead,
 )
 from app.services.bot_service import BotService
 
@@ -38,13 +38,23 @@ def update_bot_config(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/history", response_model=list[TradeHistoryRead])
+@router.get("/history", response_model=TradeHistoryPageRead)
 def get_trade_history(
-    limit: int = 500,
+    days: int | None = Query(None, ge=1, le=365),
+    side: OrderSide | None = None,
+    q: str | None = Query(None, max_length=64),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
-) -> list[TradeHistoryRead]:
-    """Lịch sử vị thế đã đóng (cho UI báo cáo)."""
-    return BotService(db).list_history(limit=min(limit, 2000))
+) -> TradeHistoryPageRead:
+    """Lịch sử vị thế đã đóng — filter, search, phân trang."""
+    return BotService(db).list_history_page(
+        days=days,
+        side=side,
+        search=q,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.get("/logs", response_model=list[SystemLogRead])

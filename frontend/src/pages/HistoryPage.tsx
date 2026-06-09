@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight, RefreshCw, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   LogPnlCell,
@@ -14,6 +14,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Table,
   TableBody,
@@ -24,28 +26,81 @@ import {
 } from "@/components/ui/table";
 import { api } from "@/lib/api";
 import { positionNotional } from "@/lib/trading";
-import type { TradeHistory } from "@/lib/types";
+import type { OrderSide, TradeHistory } from "@/lib/types";
 import { formatLogDateTime, formatLogNumber } from "@/lib/utils";
+
+type DaysFilter = 7 | 30 | 90;
+type SideFilter = "ALL" | OrderSide;
+type PageSize = 20 | 50 | 100;
+
+const selectClass =
+  "flex h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 export function HistoryPage() {
   const [rows, setRows] = useState<TradeHistory[]>([]);
+  const [total, setTotal] = useState(0);
+  const [totalPnl, setTotalPnl] = useState(0);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(0);
+
+  const [days, setDays] = useState<DaysFilter>(7);
+  const [side, setSide] = useState<SideFilter>("ALL");
+  const [pageSize, setPageSize] = useState<PageSize>(20);
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [message, setMessage] = useState("");
-
-  const totalPnl = useMemo(
-    () => rows.reduce((s, h) => s + h.profit_loss, 0),
-    [rows],
-  );
-
-  function loadHistory() {
-    return api.getHistory(500).then(setRows);
-  }
+  const firstLoad = useRef(true);
 
   useEffect(() => {
-    loadHistory().finally(() => setLoading(false));
-  }, []);
+    const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 400);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
+  const loadHistory = useCallback(async () => {
+    const data = await api.getHistory({
+      days,
+      side: side === "ALL" ? undefined : side,
+      q: debouncedSearch || undefined,
+      page,
+      page_size: pageSize,
+    });
+    setRows(data.items ?? []);
+    setTotal(data.total ?? 0);
+    setTotalPnl(data.total_pnl ?? 0);
+    setPage(data.page ?? 1);
+    setTotalPages(data.total_pages ?? 0);
+  }, [days, side, debouncedSearch, page, pageSize]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (firstLoad.current) {
+      setLoading(true);
+      firstLoad.current = false;
+    } else {
+      setRefreshing(true);
+    }
+
+    loadHistory()
+      .catch((e) => {
+        if (!cancelled) {
+          setMessage(e instanceof Error ? e.message : "Tải lịch sử thất bại");
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+          setRefreshing(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loadHistory]);
 
   async function handleRefresh() {
     setRefreshing(true);
@@ -74,6 +129,25 @@ export function HistoryPage() {
     }
   }
 
+  function handleDaysChange(value: DaysFilter) {
+    setDays(value);
+    setPage(1);
+  }
+
+  function handleSideChange(value: SideFilter) {
+    setSide(value);
+    setPage(1);
+  }
+
+  function handlePageSizeChange(value: PageSize) {
+    setPageSize(value);
+    setPage(1);
+  }
+
+  const rangeStart = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const rangeEnd = Math.min(page * pageSize, total);
+  const busy = loading || refreshing || syncing;
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -84,11 +158,7 @@ export function HistoryPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button
-            variant="outline"
-            disabled={loading || refreshing || syncing}
-            onClick={handleRefresh}
-          >
+          <Button variant="outline" disabled={busy} onClick={handleRefresh}>
             <RefreshCw
               className={`mr-2 size-4 ${refreshing ? "animate-spin" : ""}`}
             />
@@ -105,14 +175,90 @@ export function HistoryPage() {
       )}
 
       <Card>
-        <CardHeader>
-          <CardTitle>Lịch sử</CardTitle>
-          <CardDescription>
-            {loading
-              ? "Đang tải…"
-              : `${rows.length} bản ghi · Tổng P&L: ${formatLogNumber(totalPnl)} USD`}
-          </CardDescription>
+        <CardHeader className="space-y-4">
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <CardTitle>Lịch sử</CardTitle>
+              <CardDescription>
+                {loading
+                  ? "Đang tải…"
+                  : `${total} bản ghi · Tổng P&L (đã lọc): ${formatLogNumber(totalPnl)} USD`}
+              </CardDescription>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-end gap-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="history-days">Khoảng ngày</Label>
+              <select
+                id="history-days"
+                className={selectClass}
+                value={days}
+                disabled={busy}
+                onChange={(e) =>
+                  handleDaysChange(Number(e.target.value) as DaysFilter)
+                }
+              >
+                <option value={7}>7 ngày</option>
+                <option value={30}>30 ngày</option>
+                <option value={90}>90 ngày</option>
+              </select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="history-side">Chiều lệnh</Label>
+              <select
+                id="history-side"
+                className={selectClass}
+                value={side}
+                disabled={busy}
+                onChange={(e) =>
+                  handleSideChange(e.target.value as SideFilter)
+                }
+              >
+                <option value="ALL">Tất cả</option>
+                <option value="BUY">LONG</option>
+                <option value="SELL">SHORT</option>
+              </select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="history-page-size">Số dòng / trang</Label>
+              <select
+                id="history-page-size"
+                className={selectClass}
+                value={pageSize}
+                disabled={busy}
+                onChange={(e) =>
+                  handlePageSizeChange(Number(e.target.value) as PageSize)
+                }
+              >
+                <option value={20}>20</option>
+                <option value={50}>50</option>
+                <option value={100}>100</option>
+              </select>
+            </div>
+
+            <div className="min-w-[220px] flex-1 space-y-1.5">
+              <Label htmlFor="history-search">Tìm kiếm</Label>
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
+                <Input
+                  id="history-search"
+                  className="pl-8"
+                  placeholder="Ticket, symbol, lý do đóng…"
+                  value={search}
+                  disabled={busy}
+                  onChange={(e) => {
+                    setSearch(e.target.value);
+                    setPage(1);
+                  }}
+                />
+              </div>
+            </div>
+          </div>
         </CardHeader>
+
         <CardContent className="overflow-x-auto">
           <Table>
             <TableHeader>
@@ -134,7 +280,7 @@ export function HistoryPage() {
                     colSpan={8}
                     className="text-center text-muted-foreground"
                   >
-                    Chưa có lịch sử
+                    Không có bản ghi phù hợp bộ lọc
                   </TableCell>
                 </TableRow>
               )}
@@ -170,6 +316,37 @@ export function HistoryPage() {
               ))}
             </TableBody>
           </Table>
+
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-muted-foreground">
+              {total === 0
+                ? "Không có dữ liệu"
+                : `Hiển thị ${rangeStart}–${rangeEnd} / ${total} bản ghi`}
+            </p>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy || page <= 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+              >
+                <ChevronLeft className="size-4" />
+                Trước
+              </Button>
+              <span className="min-w-[88px] text-center text-sm tabular-nums">
+                Trang {totalPages === 0 ? 0 : page} / {totalPages}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy || page >= totalPages || totalPages === 0}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                Sau
+                <ChevronRight className="size-4" />
+              </Button>
+            </div>
+          </div>
         </CardContent>
       </Card>
     </div>

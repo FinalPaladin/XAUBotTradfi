@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import math
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import BotConfig, BotStatus, LogLevel, SystemLog, TradeHistory, TradePosition
+from app.models import BotConfig, BotStatus, LogLevel, OrderSide, SystemLog, TradeHistory, TradePosition
 from app.schemas import AggregatedSignalRead, BotConfigUpdate, StrategyResultRead
 from app.services.logging_service import log_message
 from app.services.mt5_client import check_mt5_status, get_mt5_client
@@ -95,6 +97,62 @@ class BotService:
             .limit(limit)
             .all()
         )
+
+    def list_history_page(
+        self,
+        *,
+        days: int | None = None,
+        side: OrderSide | None = None,
+        search: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict[str, Any]:
+        """Filtered + paginated history (date range, side, ticket search)."""
+        query = self.db.query(TradeHistory)
+
+        if days is not None and days > 0:
+            since = datetime.now(timezone.utc) - timedelta(days=days)
+            query = query.filter(TradeHistory.closed_at >= since)
+
+        if side is not None:
+            query = query.filter(TradeHistory.side == side)
+
+        term = (search or "").strip()
+        if term:
+            like = f"%{term}%"
+            query = query.filter(
+                or_(
+                    TradeHistory.ticket_id.like(like),
+                    TradeHistory.symbol.like(like),
+                    TradeHistory.close_reason.like(like),
+                )
+            )
+
+        total = query.count()
+        total_pnl = (
+            query.with_entities(func.coalesce(func.sum(TradeHistory.profit_loss), 0.0))
+            .scalar()
+        )
+
+        page = max(1, page)
+        page_size = min(max(page_size, 1), 100)
+        offset = (page - 1) * page_size
+        items = list(
+            query.order_by(TradeHistory.closed_at.desc())
+            .offset(offset)
+            .limit(page_size)
+            .all()
+        )
+        total_pages = math.ceil(total / page_size) if total else 0
+
+        return {
+            "items": items,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+            "total_pnl": round(float(total_pnl or 0.0), 2),
+        }
 
     def list_logs(
         self,
