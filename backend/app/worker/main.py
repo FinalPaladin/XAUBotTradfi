@@ -47,27 +47,46 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
+_lock_handle = None
+
+
 def _acquire_worker_lock() -> None:
-    """Refuse to start if another worker process is already running."""
-    if _LOCK_FILE.exists():
+    """Exclusive file lock — only one worker process may run."""
+    global _lock_handle
+    import msvcrt
+
+    _LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _lock_handle = open(_LOCK_FILE, "a+b")
+    try:
+        _lock_handle.seek(0)
+        msvcrt.locking(_lock_handle.fileno(), msvcrt.LK_NBLCK, 1)
+    except OSError:
+        _lock_handle.close()
+        _lock_handle = None
         try:
             other_pid = int(_LOCK_FILE.read_text(encoding="utf-8").strip())
-        except ValueError:
+        except (ValueError, OSError):
             other_pid = 0
-        if _pid_alive(other_pid):
+        if other_pid and _pid_alive(other_pid):
             logger.error(
                 "Another worker is already running (pid=%s). Exiting.", other_pid
             )
-            sys.exit(1)
-        _LOCK_FILE.unlink(missing_ok=True)
+        else:
+            logger.error("Another worker holds the lock. Exiting.")
+        sys.exit(1)
 
-    _LOCK_FILE.write_text(str(os.getpid()), encoding="utf-8")
+    _lock_handle.truncate(0)
+    _lock_handle.write(str(os.getpid()).encode())
+    _lock_handle.flush()
 
     def _release() -> None:
+        global _lock_handle
         try:
-            if _LOCK_FILE.exists() and _LOCK_FILE.read_text(encoding="utf-8").strip() == str(
-                os.getpid()
-            ):
+            if _lock_handle is not None:
+                msvcrt.locking(_lock_handle.fileno(), msvcrt.LK_UNLCK, 1)
+                _lock_handle.close()
+                _lock_handle = None
+            if _LOCK_FILE.exists():
                 _LOCK_FILE.unlink(missing_ok=True)
         except OSError:
             pass

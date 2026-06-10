@@ -89,7 +89,11 @@ def _migrate_bot_config_columns() -> None:
         ("single_tp_distance", "FLOAT NOT NULL DEFAULT 1.2"),
         ("single_tp_min_usd", "FLOAT NOT NULL DEFAULT 1.0"),
         ("single_tp_max_usd", "FLOAT NOT NULL DEFAULT 2.0"),
-        ("hard_stop_adverse_distance", "FLOAT NOT NULL DEFAULT 35.0"),
+        ("hard_stop_adverse_distance", "FLOAT NOT NULL DEFAULT 12.0"),
+        ("max_basket_loss_usd", "FLOAT NOT NULL DEFAULT 10.0"),
+        ("counter_trend_max_layers", "INT NOT NULL DEFAULT 1"),
+        ("atr_stop_multiplier", "FLOAT NOT NULL DEFAULT 2.0"),
+        ("basket_time_stop_minutes", "INT NOT NULL DEFAULT 60"),
         ("ema_period", "INT NOT NULL DEFAULT 21"),
         ("ema_weight", "FLOAT NOT NULL DEFAULT 0.15"),
     ]
@@ -118,6 +122,39 @@ def _migrate_bot_config_columns() -> None:
     with engine.begin() as conn:
         for stmt in alters:
             conn.execute(text(stmt))
+
+
+def _migrate_risk_tuning() -> None:
+    """Apply tighter risk defaults to existing bot_config rows (idempotent)."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if "bot_config" not in insp.get_table_names():
+        return
+
+    existing = {c["name"] for c in insp.get_columns("bot_config")}
+    with engine.begin() as conn:
+        if "hard_stop_adverse_distance" in existing:
+            conn.execute(
+                text(
+                    "UPDATE bot_config SET hard_stop_adverse_distance = 12.0 "
+                    "WHERE hard_stop_adverse_distance >= 35.0"
+                )
+            )
+        if "max_basket_loss_usd" in existing:
+            conn.execute(
+                text(
+                    "UPDATE bot_config SET max_basket_loss_usd = 10.0 "
+                    "WHERE max_basket_loss_usd IS NULL OR max_basket_loss_usd <= 0"
+                )
+            )
+        if "counter_trend_max_layers" in existing:
+            conn.execute(
+                text(
+                    "UPDATE bot_config SET counter_trend_max_layers = 1 "
+                    "WHERE counter_trend_max_layers IS NULL OR counter_trend_max_layers <= 0"
+                )
+            )
 
 
 def _migrate_trade_history_dedupe() -> None:
@@ -165,6 +202,7 @@ def init_db() -> None:
 
     Base.metadata.create_all(bind=engine)
     _migrate_bot_config_columns()
+    _migrate_risk_tuning()
     _migrate_trade_history_dedupe()
     with SessionLocal() as db:
         if seed_if_empty(db):

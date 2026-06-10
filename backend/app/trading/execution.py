@@ -19,7 +19,45 @@ class OrderExecutor:
         self.db = db
         self._client = client or get_mt5_client()
 
+    def _mt5_open_count(self, symbol: str, magic: int, side: OrderSide) -> int:
+        """Count MT5 open positions for symbol/magic on one side."""
+        try:
+            import MetaTrader5 as mt5
+        except ImportError:
+            return 0
+        positions = self._client.positions_get(symbol=symbol, magic=magic)
+        if side == OrderSide.BUY:
+            return sum(1 for p in positions if p.type == mt5.POSITION_TYPE_BUY)
+        return sum(1 for p in positions if p.type == mt5.POSITION_TYPE_SELL)
+
+    def _db_layer_count(self, bot_id: int, side: OrderSide, layer_index: int) -> int:
+        return (
+            self.db.query(TradePosition)
+            .filter(
+                TradePosition.bot_id == bot_id,
+                TradePosition.side == side,
+                TradePosition.layer_index == layer_index,
+            )
+            .count()
+        )
+
     def open_position(self, bot: BotConfig, plan: OrderPlan) -> TradePosition | None:
+        if plan.layer_index == 0:
+            if self._db_layer_count(bot.id, plan.side, 0) > 0:
+                logger.warning(
+                    "Skip duplicate layer 0 %s — already in DB (bot=%s)",
+                    plan.side.value,
+                    bot.id,
+                )
+                return None
+            if self._mt5_open_count(plan.symbol, plan.magic, plan.side) > 0:
+                logger.warning(
+                    "Skip duplicate layer 0 %s — MT5 already has open position (bot=%s)",
+                    plan.side.value,
+                    bot.id,
+                )
+                return None
+
         sl = plan.sl_price if plan.use_broker_sl_tp and plan.sl_price else 0.0
         tp = plan.tp_price if plan.use_broker_sl_tp and plan.tp_price else 0.0
 

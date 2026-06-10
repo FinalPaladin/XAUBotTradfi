@@ -137,14 +137,19 @@ def calculate_layer_volume(
     is_scalp_mode: bool = False,
 ) -> float:
     """
-    Volume cố định theo nấc vốn — không dùng đòn bẩy / Martingale.
+    Volume theo nấc vốn; DCA layers scale by dca_volume_multiplier (P3).
 
-    Mọi lớp DCA dùng cùng lot size tại thời điểm mở.
+    Lớp 0: base lot. Lớp N: base × multiplier^N (clamped to broker limits).
     Scalp mode (lớp 1 khi H1 NEUTRAL): giảm 50% volume.
     """
-    _ = entry_price, layer_index
+    _ = entry_price
     balance = account_balance if account_balance else resolve_account_balance()
-    volume = calculate_fixed_lot_size(balance)
+    base = calculate_fixed_lot_size(balance)
+    multiplier = getattr(config, "dca_volume_multiplier", 1.0) or 1.0
+    if layer_index > 0 and multiplier != 1.0:
+        volume = base * (multiplier ** layer_index)
+    else:
+        volume = base
     if is_scalp_mode:
         volume *= SCALP_VOLUME_MULTIPLIER
     return _clamp_volume(config.symbol, volume)

@@ -9,10 +9,28 @@ metrics tổng hợp của basket, không xử lý từng ticket riêng lẻ khi
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from app.models import BotConfig, OrderSide, TradePosition
 from app.trading.risk import resolve_basket_tp_min, resolve_single_tp_min
+from app.trading.signal_engine import MainTrend
 from app.trading.types import AggregatedSignal, BasketAction, BasketDecision, NetSignal
+
+# Exit / DCA guard constants (P2)
+TREND_FLIP_ADVERSE_MIN = 3.0
+M5_REVERSAL_EXIT_SCORE = 0.5
+BASKET_TIME_STOP_ADVERSE_MIN = 8.0
+
+
+@dataclass
+class BasketContext:
+    """Market + signal context for basket evaluation."""
+
+    main_trend: MainTrend
+    entry_net_raw: int = int(NetSignal.HOLD)
+    entry_score: float = 0.0
+    is_scalp_mode: bool = False
+    atr_value: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -114,9 +132,6 @@ def calculate_breakeven_price(basket: PositionBasket) -> float:
     Tính giá hòa vốn trung bình có trọng số theo volume cho toàn bộ basket.
 
     Công thức: BE = Σ(entry_i × volume_i) / Σ(volume_i)
-
-    Với lệnh BUY: khi giá hiện tại >= BE → basket hòa vốn trở lên.
-    Với lệnh SELL: khi giá hiện tại <= BE → basket hòa vốn trở lên.
     """
     total_vol = basket.total_volume
     if total_vol <= 0:
@@ -160,8 +175,6 @@ def calculate_layer_spacing_distance(
 ) -> float:
     """
     Khoảng cách adverse từ lớp cuối cùng (dùng để quyết định nhồi DCA tiếp).
-
-    Chỉ nhồi lớp mới khi khoảng cách này >= layer_spacing_min (5 giá Vàng).
     """
     last = basket.last_layer
     if last is None:
@@ -169,6 +182,63 @@ def calculate_layer_spacing_distance(
     if basket.side == OrderSide.BUY:
         return max(0.0, last.entry_price - current_price)
     return max(0.0, current_price - last.entry_price)
+
+
+def basket_age_minutes(basket: PositionBasket) -> float:
+    """Tuổi basket = thời gian từ lớp mở sớm nhất."""
+    now = datetime.now(timezone.utc)
+    oldest: datetime | None = None
+    for layer in basket.layers:
+        opened = layer.opened_at
+        if opened is None:
+            continue
+        if opened.tzinfo is None:
+            opened = opened.replace(tzinfo=timezone.utc)
+        if oldest is None or opened < oldest:
+            oldest = opened
+    if oldest is None:
+        return 0.0
+    return (now - oldest).total_seconds() / 60.0
+
+
+def is_basket_counter_trend(
+    basket: PositionBasket,
+    main_trend: MainTrend,
+) -> bool:
+    """True khi basket ngược xu hướng H1."""
+    if main_trend == MainTrend.NEUTRAL:
+        return False
+    if basket.side == OrderSide.BUY and main_trend == MainTrend.BEARISH:
+        return True
+    if basket.side == OrderSide.SELL and main_trend == MainTrend.BULLISH:
+        return True
+    return False
+
+
+def effective_max_layers(
+    config: BotConfig,
+    basket: PositionBasket,
+    ctx: BasketContext,
+) -> int:
+    """P1: counter-trend / scalp baskets capped at counter_trend_max_layers."""
+    base = getattr(config, "max_layers", None) or config.max_open_positions
+    counter_cap = getattr(config, "counter_trend_max_layers", 1) or 1
+    if is_basket_counter_trend(basket, ctx.main_trend) or ctx.is_scalp_mode:
+        return min(base, counter_cap)
+    return base
+
+
+def resolve_max_basket_loss_usd(
+    config: BotConfig,
+    account_balance: float | None = None,
+) -> float:
+    """P0: cap USD loss per basket (scaled lightly with balance)."""
+    base = getattr(config, "max_basket_loss_usd", 10.0) or 10.0
+    balance = account_balance or getattr(config, "base_equity_usd", None) or 200.0
+    ref_raw = getattr(config, "base_equity_usd", None)
+    ref = ref_raw if ref_raw and ref_raw > 0 else 200.0
+    scale = max(balance / ref, 1.0)
+    return round(base * scale, 2)
 
 
 # ---------------------------------------------------------------------------
@@ -182,12 +252,7 @@ def check_joint_take_profit(
     current_price: float,
     account_balance: float | None = None,
 ) -> bool:
-    """
-    Kiểm tra điều kiện thoát hiểm tổng (Basket Take Profit / Joint Close).
-
-    Chỉ áp dụng khi basket có > 1 lớp (is_multi_layer / gồng DCA).
-    Ngưỡng TP scale theo số dư thực ($2 UI @ $200 → $100 @ $10,000).
-    """
+    """Joint TP khi basket multi-layer đạt ngưỡng USD."""
     if not basket.is_multi_layer:
         return False
 
@@ -204,11 +269,7 @@ def check_single_layer_scalp_tp(
     current_price: float,
     account_balance: float | None = None,
 ) -> bool:
-    """
-    Take Profit lớp đơn (thuận xu thế, chưa DCA).
-
-    Ngưỡng USD scale theo số dư; fallback khoảng cách giá Vàng.
-    """
+    """Take Profit lớp đơn (thuận xu thế, chưa DCA)."""
     if basket.layer_count != 1:
         return False
 
@@ -232,40 +293,134 @@ def check_hard_stop_loss(
     basket: PositionBasket,
     current_price: float,
 ) -> bool:
-    """
-    Black Swan Protection — cắt lỗ khẩn cấp toàn basket.
-
-    Nếu giá chạy ngược từ anchor vượt hard_stop_adverse_distance (mặc định 35 giá Vàng)
-    mà chưa hồi, đóng toàn bộ lệnh để bảo vệ số dư isolated (~200U).
-    """
+    """Black Swan — cắt lỗ khẩn cấp toàn basket (mặc định 12 giá Vàng)."""
     adverse = calculate_adverse_distance(basket, current_price)
-    limit = getattr(config, "hard_stop_adverse_distance", 35.0) or 35.0
+    limit = getattr(config, "hard_stop_adverse_distance", 12.0) or 12.0
     return adverse >= limit
+
+
+def check_max_basket_loss_usd(
+    config: BotConfig,
+    basket: PositionBasket,
+    current_price: float,
+    account_balance: float | None = None,
+) -> bool:
+    """P0: đóng basket khi floating loss vượt cap USD."""
+    net_pnl = calculate_net_pnl_usd(basket, current_price)
+    limit = resolve_max_basket_loss_usd(config, account_balance)
+    return net_pnl <= -limit
+
+
+def check_atr_stop(
+    config: BotConfig,
+    basket: PositionBasket,
+    current_price: float,
+    atr_value: float | None,
+) -> bool:
+    """P2: ATR-based adverse stop from anchor."""
+    if atr_value is None or atr_value <= 0:
+        return False
+    multiplier = getattr(config, "atr_stop_multiplier", 2.0) or 2.0
+    adverse = calculate_adverse_distance(basket, current_price)
+    return adverse >= atr_value * multiplier
+
+
+def check_trend_flip_exit(
+    basket: PositionBasket,
+    ctx: BasketContext,
+    adverse: float,
+) -> bool:
+    """P1/P2: thoát sớm khi H1 đảo ngược basket và đã adverse đủ."""
+    if adverse < TREND_FLIP_ADVERSE_MIN:
+        return False
+    if basket.side == OrderSide.SELL and ctx.main_trend == MainTrend.BULLISH:
+        return True
+    if basket.side == OrderSide.BUY and ctx.main_trend == MainTrend.BEARISH:
+        return True
+    return False
+
+
+def check_m5_reversal_exit(
+    basket: PositionBasket,
+    ctx: BasketContext,
+    net_pnl: float,
+) -> bool:
+    """P2: M5 momentum flip against open basket while underwater."""
+    if net_pnl >= 0:
+        return False
+    if basket.side == OrderSide.SELL:
+        return (
+            ctx.entry_net_raw == int(NetSignal.BUY)
+            and ctx.entry_score >= M5_REVERSAL_EXIT_SCORE
+        )
+    if basket.side == OrderSide.BUY:
+        return (
+            ctx.entry_net_raw == int(NetSignal.SELL)
+            and ctx.entry_score <= -M5_REVERSAL_EXIT_SCORE
+        )
+    return False
+
+
+def check_time_stop(
+    config: BotConfig,
+    basket: PositionBasket,
+    adverse: float,
+    net_pnl: float,
+) -> bool:
+    """P2: time stop — giữ lệnh lỗ quá lâu với adverse lớn."""
+    if net_pnl >= 0:
+        return False
+    minutes = getattr(config, "basket_time_stop_minutes", 60) or 60
+    if basket_age_minutes(basket) < minutes:
+        return False
+    return adverse >= BASKET_TIME_STOP_ADVERSE_MIN
 
 
 def should_add_dca_layer(
     config: BotConfig,
     basket: PositionBasket,
     current_price: float,
+    *,
+    ctx: BasketContext | None = None,
+    net_pnl_usd: float | None = None,
 ) -> bool:
     """
-    Logic DCA Martingale nén: nhồi lớp tiếp theo khi giá chạy ngược đủ xa.
+    Logic DCA: nhồi lớp tiếp theo khi giá chạy ngược đủ xa (thuận trend only).
 
-    Điều kiện:
-    - Chưa đạt max_layers (mặc định 5)
-    - Khoảng cách từ lớp cuối >= layer_spacing_min (5 giá Vàng, tối đa 7)
-    - Không vượt hard stop (35 giá) — nếu vượt thì cắt lỗ, không nhồi thêm
+    P0: cấm DCA ngược H1; hủy DCA khi lỗ > 50% max_basket_loss.
+    P3: spacing phải nằm trong [min, max]; spacing > max = trend chạy quá nhanh.
     """
-    max_layers = getattr(config, "max_layers", None) or config.max_open_positions
+    trend = ctx.main_trend if ctx else MainTrend.NEUTRAL
+    max_layers = (
+        effective_max_layers(config, basket, ctx)
+        if ctx
+        else getattr(config, "max_layers", None) or config.max_open_positions
+    )
+
     if basket.layer_count >= max_layers:
         return False
 
     if check_hard_stop_loss(config, basket, current_price):
         return False
 
+    if is_basket_counter_trend(basket, trend):
+        return False
+
+    if net_pnl_usd is not None:
+        max_loss = resolve_max_basket_loss_usd(config)
+        if net_pnl_usd <= -max_loss * 0.5:
+            return False
+
     spacing = calculate_layer_spacing_distance(basket, current_price)
     spacing_min = getattr(config, "layer_spacing_min", 5.0) or 5.0
-    return spacing >= spacing_min
+    spacing_max = getattr(config, "layer_spacing_max", 7.0) or 7.0
+
+    if spacing < spacing_min:
+        return False
+    if spacing > spacing_max:
+        return False
+
+    return True
 
 
 def evaluate_basket(
@@ -274,16 +429,26 @@ def evaluate_basket(
     current_price: float,
     signal: AggregatedSignal,
     account_balance: float | None = None,
+    *,
+    ctx: BasketContext | None = None,
 ) -> BasketDecision:
     """
     Đánh giá basket tổng hợp — thay thế evaluate_position per-ticket khi DCA.
 
-    Thứ tự ưu tiên:
-    1. Hard Stop (Black Swan) → CLOSE_HARD_STOP
-    2. Joint TP (multi-layer) → CLOSE_BASKET_TP
-    3. Single scalp TP (1 lớp) → CLOSE_SINGLE_SCALP
-    4. Giữ lệnh → HOLD
+    Thứ tự ưu tiên (P0–P2):
+    1. Trend flip exit
+    2. M5 reversal exit
+    3. Max USD loss cap
+    4. ATR stop
+    5. Time stop
+    6. Hard stop
+    7. Joint TP / Single scalp TP
+    8. HOLD
     """
+    _ = signal
+    if ctx is None:
+        ctx = BasketContext(main_trend=MainTrend.NEUTRAL)
+
     breakeven = calculate_breakeven_price(basket)
     net_pnl = calculate_net_pnl_usd(basket, current_price)
     adverse = calculate_adverse_distance(basket, current_price)
@@ -294,7 +459,43 @@ def evaluate_basket(
         "net_pnl_usd": net_pnl,
         "adverse_distance": round(adverse, 2),
         "total_volume": basket.total_volume,
+        "basket_age_min": round(basket_age_minutes(basket), 1),
     }
+
+    if check_trend_flip_exit(basket, ctx, adverse):
+        return BasketDecision(
+            BasketAction.CLOSE_TREND_FLIP,
+            close_reason="TREND_FLIP",
+            meta=meta,
+        )
+
+    if check_m5_reversal_exit(basket, ctx, net_pnl):
+        return BasketDecision(
+            BasketAction.CLOSE_M5_REVERSAL,
+            close_reason="M5_REVERSAL",
+            meta=meta,
+        )
+
+    if check_max_basket_loss_usd(config, basket, current_price, account_balance):
+        return BasketDecision(
+            BasketAction.CLOSE_MAX_USD_LOSS,
+            close_reason="MAX_USD_LOSS",
+            meta=meta,
+        )
+
+    if check_atr_stop(config, basket, current_price, ctx.atr_value):
+        return BasketDecision(
+            BasketAction.CLOSE_ATR_STOP,
+            close_reason="ATR_STOP",
+            meta=meta,
+        )
+
+    if check_time_stop(config, basket, adverse, net_pnl):
+        return BasketDecision(
+            BasketAction.CLOSE_TIME_STOP,
+            close_reason="TIME_STOP",
+            meta=meta,
+        )
 
     if check_hard_stop_loss(config, basket, current_price):
         return BasketDecision(
@@ -322,10 +523,19 @@ def evaluate_basket(
 
 def should_open_initial_layer(
     signal: AggregatedSignal,
-    open_count: int,
+    open_positions: list[TradePosition],
 ) -> bool:
-    """Mở lớp 1 khi flat và có tín hiệu BUY/SELL từ aggregator."""
-    return open_count == 0 and signal.net_signal != int(NetSignal.HOLD)
+    """Mở lớp 1 chỉ khi chưa có lệnh cùng chiều (flat basket trên side đó)."""
+    if signal.net_signal == int(NetSignal.HOLD):
+        return False
+    target_side = (
+        OrderSide.BUY
+        if signal.net_signal == int(NetSignal.BUY)
+        else OrderSide.SELL
+    )
+    if any(p.side == target_side for p in open_positions):
+        return False
+    return True
 
 
 def should_open_reversal_hedge_layer(
@@ -337,22 +547,9 @@ def should_open_reversal_hedge_layer(
     """
     Mở lệnh ngược chiều basket đang giữ khi reversal đạt ngưỡng (scalp).
 
-    Ví dụ: đang SHORT + tín hiệu LONG mạnh → mở LONG hedge bắt đáy.
+    Disabled in trend-only mode — hedge adds counter-trend exposure.
     """
-    if not is_scalp_mode or signal.net_signal == int(NetSignal.HOLD):
-        return False
-
-    target_side = (
-        OrderSide.BUY
-        if signal.net_signal == int(NetSignal.BUY)
-        else OrderSide.SELL
-    )
-    existing_sides = {p.side for p in positions}
-    if not existing_sides or target_side in existing_sides:
-        return False
-
-    opposite = OrderSide.SELL if target_side == OrderSide.BUY else OrderSide.BUY
-    return opposite in existing_sides
+    return False
 
 
 def basket_side_from_signal(signal: AggregatedSignal) -> OrderSide | None:

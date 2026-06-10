@@ -10,7 +10,10 @@ from app.models import BotConfig, BotStatus, LogLevel, OrderSide, TradePosition
 from app.services.logging_service import log_message
 from app.services.mt5_client import get_mt5_client
 from app.trading.basket_manager import (
+    BasketContext,
     build_position_basket,
+    calculate_net_pnl_usd,
+    effective_max_layers,
     evaluate_basket,
     should_add_dca_layer,
     should_open_initial_layer,
@@ -181,7 +184,19 @@ class TradingOrchestrator:
                         )
                     }
 
-            max_layers = bot.max_layers or bot.max_open_positions
+            atr_meta = trend_signal.meta.get("atr") or {}
+            atr_value = atr_meta.get("current_atr")
+            if atr_value is not None:
+                atr_value = float(atr_value)
+
+            basket_ctx = BasketContext(
+                main_trend=trend_signal.main_trend,
+                entry_net_raw=int(trend_signal.meta.get("entry_net_raw", 0)),
+                entry_score=trend_signal.entry_score,
+                is_scalp_mode=trend_signal.is_scalp_mode,
+                atr_value=atr_value,
+            )
+
             for side in (OrderSide.BUY, OrderSide.SELL):
                 side_positions = [p for p in open_positions if p.side == side]
                 if not side_positions:
@@ -192,7 +207,12 @@ class TradingOrchestrator:
                     continue
 
                 decision = evaluate_basket(
-                    bot, basket, price, signal, account_balance
+                    bot,
+                    basket,
+                    price,
+                    signal,
+                    account_balance,
+                    ctx=basket_ctx,
                 )
 
                 if decision.action != BasketAction.HOLD:
@@ -227,9 +247,18 @@ class TradingOrchestrator:
                             )
                         }
 
+                net_pnl = calculate_net_pnl_usd(basket, price)
+                side_max_layers = effective_max_layers(bot, basket, basket_ctx)
+
                 if (
-                    should_add_dca_layer(bot, basket, price)
-                    and basket.layer_count < max_layers
+                    should_add_dca_layer(
+                        bot,
+                        basket,
+                        price,
+                        ctx=basket_ctx,
+                        net_pnl_usd=net_pnl,
+                    )
+                    and basket.layer_count < side_max_layers
                 ):
                     next_layer = basket.layer_count
                     plan = build_layer_plan(
@@ -239,19 +268,20 @@ class TradingOrchestrator:
                         layer_index=next_layer,
                         basket_anchor_price=basket.anchor_price,
                         account_balance=account_balance,
+                        is_scalp_mode=basket_ctx.is_scalp_mode,
                     )
                     action_msg = None
                     if plan:
                         self._executor.open_position(bot, plan)
                         log_message(
                             self.db,
-                            f"DCA layer {next_layer + 1}/{max_layers} "
+                            f"DCA layer {next_layer + 1}/{side_max_layers} "
                             f"{plan.side.value} {plan.volume} @ {price}",
                             bot_id=bot.id,
                             source="execution",
                         )
                         action_msg = (
-                            f"DCA lớp {next_layer + 1}/{max_layers} "
+                            f"DCA lớp {next_layer + 1}/{side_max_layers} "
                             f"{plan.side.value} vol={plan.volume}"
                         )
                     self.db.commit()
@@ -293,7 +323,16 @@ class TradingOrchestrator:
                     self.db.commit()
                     return {"summary": make_summary(action=action_msg)}
 
-            if should_open_initial_layer(signal, open_count):
+            if should_open_initial_layer(signal, open_positions):
+                fresh_positions = (
+                    self.db.query(TradePosition)
+                    .filter(TradePosition.bot_id == bot.id)
+                    .all()
+                )
+                if not should_open_initial_layer(signal, fresh_positions):
+                    self.db.commit()
+                    return {"summary": make_summary(action=None)}
+
                 plan = build_order_plan(
                     bot,
                     signal,
@@ -301,7 +340,14 @@ class TradingOrchestrator:
                     equity=account_balance,
                 )
                 if plan:
-                    self._executor.open_position(bot, plan)
+                    opened = self._executor.open_position(bot, plan)
+                    if opened is None:
+                        self.db.commit()
+                        return {
+                            "summary": make_summary(
+                                action="Bỏ qua mở lớp 1 — đã có lệnh cùng chiều"
+                            )
+                        }
                     scalp_tag = " SCALP_MODE" if trend_signal.is_scalp_mode else ""
                     filter_log = trend_signal.meta.get("filter_log", "")
                     log_message(

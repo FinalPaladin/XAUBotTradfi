@@ -6,6 +6,7 @@ import pytest
 
 from app.models import BotConfig, BotStatus, OrderSide
 from app.trading.basket_manager import (
+    BasketContext,
     PositionBasket,
     PositionLayer,
     build_position_basket,
@@ -14,11 +15,18 @@ from app.trading.basket_manager import (
     calculate_net_pnl_usd,
     check_hard_stop_loss,
     check_joint_take_profit,
+    check_max_basket_loss_usd,
+    check_m5_reversal_exit,
     check_single_layer_scalp_tp,
+    check_trend_flip_exit,
+    effective_max_layers,
+    evaluate_basket,
     should_add_dca_layer,
+    should_open_initial_layer,
     should_open_reversal_hedge_layer,
 )
-from app.trading.types import AggregatedSignal, NetSignal, StrategyResult
+from app.trading.signal_engine import MainTrend
+from app.trading.types import AggregatedSignal, BasketAction, NetSignal, StrategyResult
 
 
 @pytest.fixture
@@ -32,12 +40,18 @@ def dca_config() -> BotConfig:
         max_open_positions=5,
         max_layers=5,
         layer_spacing_min=5.0,
+        layer_spacing_max=7.0,
         basket_tp_min_usd=2.0,
         basket_tp_max_usd=5.0,
         single_tp_min_usd=1.0,
         single_tp_max_usd=2.0,
         single_tp_distance=1.2,
-        hard_stop_adverse_distance=35.0,
+        base_equity_usd=200.0,
+        hard_stop_adverse_distance=12.0,
+        max_basket_loss_usd=10.0,
+        counter_trend_max_layers=1,
+        atr_stop_multiplier=2.0,
+        basket_time_stop_minutes=60,
         signal_threshold=0.65,
         donchian_weight=0.35,
         supertrend_weight=0.30,
@@ -56,6 +70,23 @@ def _basket_buy(layers: list[tuple[float, float]]) -> PositionBasket:
             PositionLayer(
                 ticket_id=str(i),
                 side=OrderSide.BUY,
+                volume=vol,
+                entry_price=price,
+                layer_index=i,
+            )
+            for i, (price, vol) in enumerate(layers)
+        ],
+    )
+
+
+def _basket_sell(layers: list[tuple[float, float]]) -> PositionBasket:
+    return PositionBasket(
+        side=OrderSide.SELL,
+        anchor_price=layers[0][0],
+        layers=[
+            PositionLayer(
+                ticket_id=str(i),
+                side=OrderSide.SELL,
                 volume=vol,
                 entry_price=price,
                 layer_index=i,
@@ -84,22 +115,79 @@ def test_joint_tp_requires_2_usd_for_dca(dca_config: BotConfig) -> None:
     assert check_joint_take_profit(dca_config, basket, 2650.0)
 
 
-def test_check_single_layer_scalp_tp(dca_config: BotConfig) -> None:
-    basket = _basket_buy([(2650.0, 0.02)])
-    assert not check_single_layer_scalp_tp(dca_config, basket, 2650.2)
-    assert check_single_layer_scalp_tp(dca_config, basket, 2650.5)
-
-
-def test_check_hard_stop_35_gold(dca_config: BotConfig) -> None:
+def test_check_hard_stop_12_gold(dca_config: BotConfig) -> None:
     basket = _basket_buy([(2650.0, 0.02), (2645.0, 0.027)])
-    assert not check_hard_stop_loss(dca_config, basket, 2620.0)
-    assert check_hard_stop_loss(dca_config, basket, 2614.0)
+    assert not check_hard_stop_loss(dca_config, basket, 2639.0)
+    assert check_hard_stop_loss(dca_config, basket, 2637.0)
 
 
 def test_should_add_dca_layer_spacing(dca_config: BotConfig) -> None:
     basket = _basket_buy([(2650.0, 0.02)])
-    assert not should_add_dca_layer(dca_config, basket, 2648.0)
-    assert should_add_dca_layer(dca_config, basket, 2644.0)
+    ctx = BasketContext(main_trend=MainTrend.BULLISH)
+    assert not should_add_dca_layer(
+        dca_config, basket, 2648.0, ctx=ctx, net_pnl_usd=0.0
+    )
+    assert should_add_dca_layer(
+        dca_config, basket, 2644.0, ctx=ctx, net_pnl_usd=0.0
+    )
+
+
+def test_dca_blocked_counter_trend(dca_config: BotConfig) -> None:
+    basket = _basket_sell([(2650.0, 0.02)])
+    ctx = BasketContext(main_trend=MainTrend.BULLISH)
+    assert not should_add_dca_layer(
+        dca_config, basket, 2656.0, ctx=ctx, net_pnl_usd=-1.0
+    )
+
+
+def test_dca_blocked_when_spacing_exceeds_max(dca_config: BotConfig) -> None:
+    basket = _basket_buy([(2650.0, 0.02)])
+    ctx = BasketContext(main_trend=MainTrend.BULLISH)
+    assert not should_add_dca_layer(
+        dca_config, basket, 2640.0, ctx=ctx, net_pnl_usd=0.0
+    )
+
+
+def test_max_basket_loss_usd(dca_config: BotConfig) -> None:
+    basket = _basket_buy([(2650.0, 0.02)])
+    assert not check_max_basket_loss_usd(dca_config, basket, 2649.0)
+    assert check_max_basket_loss_usd(dca_config, basket, 2644.0)
+
+
+def test_trend_flip_exit_short_in_bullish() -> None:
+    basket = _basket_sell([(2650.0, 0.02)])
+    ctx = BasketContext(main_trend=MainTrend.BULLISH)
+    adverse = calculate_adverse_distance(basket, 2654.0)
+    assert check_trend_flip_exit(basket, ctx, adverse)
+
+
+def test_m5_reversal_exit_short_underwater() -> None:
+    basket = _basket_sell([(2650.0, 0.02)])
+    ctx = BasketContext(
+        main_trend=MainTrend.BEARISH,
+        entry_net_raw=int(NetSignal.BUY),
+        entry_score=0.6,
+    )
+    assert check_m5_reversal_exit(basket, ctx, net_pnl=-2.0)
+
+
+def test_evaluate_basket_trend_flip_priority(dca_config: BotConfig) -> None:
+    basket = _basket_sell([(2650.0, 0.02)])
+    ctx = BasketContext(main_trend=MainTrend.BULLISH)
+    decision = evaluate_basket(
+        dca_config,
+        basket,
+        2654.0,
+        AggregatedSignal([], 0.0, int(NetSignal.HOLD)),
+        ctx=ctx,
+    )
+    assert decision.action == BasketAction.CLOSE_TREND_FLIP
+
+
+def test_effective_max_layers_counter_trend(dca_config: BotConfig) -> None:
+    basket = _basket_sell([(2650.0, 0.02)])
+    ctx = BasketContext(main_trend=MainTrend.BULLISH, is_scalp_mode=True)
+    assert effective_max_layers(dca_config, basket, ctx) == 1
 
 
 def test_calculate_adverse_distance_buy(dca_config: BotConfig) -> None:
@@ -107,7 +195,21 @@ def test_calculate_adverse_distance_buy(dca_config: BotConfig) -> None:
     assert calculate_adverse_distance(basket, 2640.0) == 10.0
 
 
-def test_reversal_hedge_allows_long_while_short_open() -> None:
+def test_should_open_initial_layer_blocks_same_side() -> None:
+    class MockPos:
+        def __init__(self, side: OrderSide):
+            self.side = side
+
+    signal = AggregatedSignal(
+        strategy_results=[],
+        weighted_score=-0.9,
+        net_signal=int(NetSignal.SELL),
+    )
+    assert should_open_initial_layer(signal, [])
+    assert not should_open_initial_layer(signal, [MockPos(OrderSide.SELL)])
+
+
+def test_reversal_hedge_disabled() -> None:
     class MockPos:
         def __init__(self, side: OrderSide):
             self.side = side
@@ -119,40 +221,6 @@ def test_reversal_hedge_allows_long_while_short_open() -> None:
         is_scalp_mode=True,
     )
     positions = [MockPos(OrderSide.SELL)]
-    assert should_open_reversal_hedge_layer(
-        signal, positions, is_scalp_mode=True
-    )
-
-
-def test_reversal_hedge_blocked_without_scalp_mode() -> None:
-    class MockPos:
-        def __init__(self, side: OrderSide):
-            self.side = side
-
-    signal = AggregatedSignal(
-        strategy_results=[],
-        weighted_score=0.85,
-        net_signal=int(NetSignal.BUY),
-        is_scalp_mode=True,
-    )
-    positions = [MockPos(OrderSide.SELL)]
-    assert not should_open_reversal_hedge_layer(
-        signal, positions, is_scalp_mode=False
-    )
-
-
-def test_reversal_hedge_blocked_when_long_already_open() -> None:
-    class MockPos:
-        def __init__(self, side: OrderSide):
-            self.side = side
-
-    signal = AggregatedSignal(
-        strategy_results=[],
-        weighted_score=0.85,
-        net_signal=int(NetSignal.BUY),
-        is_scalp_mode=True,
-    )
-    positions = [MockPos(OrderSide.SELL), MockPos(OrderSide.BUY)]
     assert not should_open_reversal_hedge_layer(
         signal, positions, is_scalp_mode=True
     )

@@ -51,7 +51,11 @@ class BotConfigRead(ORMBase):
     single_tp_min_usd: float = 1.0
     single_tp_max_usd: float = 2.0
     single_tp_distance: float = 1.2
-    hard_stop_adverse_distance: float = 35.0
+    hard_stop_adverse_distance: float = 12.0
+    max_basket_loss_usd: float = 10.0
+    counter_trend_max_layers: int = 1
+    atr_stop_multiplier: float = 2.0
+    basket_time_stop_minutes: int = 60
     created_at: datetime
     updated_at: datetime
 
@@ -80,6 +84,10 @@ class BotConfigUpdate(BaseModel):
     single_tp_max_usd: float | None = Field(None, ge=0.1, le=1000)
     single_tp_distance: float | None = Field(None, ge=0.1, le=20)
     hard_stop_adverse_distance: float | None = Field(None, ge=5, le=200)
+    max_basket_loss_usd: float | None = Field(None, ge=1, le=10000)
+    counter_trend_max_layers: int | None = Field(None, ge=1, le=5)
+    atr_stop_multiplier: float | None = Field(None, ge=0.5, le=10)
+    basket_time_stop_minutes: int | None = Field(None, ge=5, le=1440)
     magic_number: int | None = None
     rsi_swing_lookback: int | None = Field(None, ge=2, le=20)
     take_profit_pct: float | None = Field(None, ge=0)

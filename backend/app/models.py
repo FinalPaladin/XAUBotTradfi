@@ -83,7 +83,19 @@ class BotConfig(Base):
     single_tp_max_usd: Mapped[float] = mapped_column(Float, default=2.0, nullable=False)
     single_tp_distance: Mapped[float] = mapped_column(Float, default=1.2, nullable=False)
     hard_stop_adverse_distance: Mapped[float] = mapped_column(
-        Float, default=35.0, nullable=False
+        Float, default=12.0, nullable=False
+    )
+    max_basket_loss_usd: Mapped[float] = mapped_column(
+        Float, default=10.0, nullable=False
+    )
+    counter_trend_max_layers: Mapped[int] = mapped_column(
+        Integer, default=1, nullable=False
+    )
+    atr_stop_multiplier: Mapped[float] = mapped_column(
+        Float, default=2.0, nullable=False
+    )
+    basket_time_stop_minutes: Mapped[int] = mapped_column(
+        Integer, default=60, nullable=False
     )
 
     # Donchian channel strategy

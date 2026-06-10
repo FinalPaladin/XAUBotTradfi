@@ -60,14 +60,13 @@ def _net_to_trend(net: int) -> MainTrend | None:
 
 
 def _resolve_main_trend(h1_net: int) -> tuple[MainTrend, str, set[int]]:
-    """Xác định xu hướng chính từ H1. Cả hai chiều đều có thể giao dịch (rule khác nhau)."""
+    """Xác định xu hướng chính từ H1. Chỉ giao dịch thuận trend (trừ H1 NEUTRAL scalp)."""
     h1_trend = _net_to_trend(h1_net)
-    both = {int(NetSignal.BUY), int(NetSignal.SELL)}
 
     if h1_trend == MainTrend.BULLISH:
-        return MainTrend.BULLISH, "H1", both
+        return MainTrend.BULLISH, "H1", {int(NetSignal.BUY)}
     if h1_trend == MainTrend.BEARISH:
-        return MainTrend.BEARISH, "H1", both
+        return MainTrend.BEARISH, "H1", {int(NetSignal.SELL)}
     return MainTrend.NEUTRAL, "NONE", set()
 
 
@@ -81,8 +80,8 @@ def _filter_entry_signal(
     """
     Lọc tín hiệu M5 theo xu hướng H1.
 
-    - H1 BULLISH: LONG bình thường; SHORT đảo chiều khi >= entry_threshold.
-    - H1 BEARISH: SHORT bình thường; LONG bắt đáy khi >= entry_threshold.
+    - H1 BULLISH: chỉ LONG (chặn SHORT ngược trend).
+    - H1 BEARISH: chỉ SHORT (chặn LONG ngược trend).
     - H1 NEUTRAL: scalp mode khi điểm M5 cực cao (>= 0.8 / <= -0.8).
     """
     if main_trend == MainTrend.BULLISH:
@@ -91,14 +90,9 @@ def _filter_entry_signal(
                 f"H1 BULLISH | M5 Score: {entry_score:+.2f} "
                 f"-> Allowed LONG (NORMAL - 100% Volume)"
             )
-        if entry_net == int(NetSignal.SELL) and entry_score <= -entry_threshold:
-            return entry_net, True, (
-                f"H1 BULLISH | M5 Score: {entry_score:+.2f} "
-                f"-> Allowed SHORT (REVERSAL - 50% Volume)"
-            )
         return int(NetSignal.HOLD), False, (
             f"H1 BULLISH | M5 Score: {entry_score:+.2f} "
-            f"-> BLOCKED (weak counter-trend or below threshold)"
+            f"-> BLOCKED SHORT (trend-only mode)"
         )
 
     if main_trend == MainTrend.BEARISH:
@@ -107,14 +101,9 @@ def _filter_entry_signal(
                 f"H1 BEARISH | M5 Score: {entry_score:+.2f} "
                 f"-> Allowed SHORT (NORMAL - 100% Volume)"
             )
-        if entry_net == int(NetSignal.BUY) and entry_score >= entry_threshold:
-            return entry_net, True, (
-                f"H1 BEARISH | M5 Score: {entry_score:+.2f} "
-                f"-> Allowed LONG (REVERSAL - 50% Volume)"
-            )
         return int(NetSignal.HOLD), False, (
             f"H1 BEARISH | M5 Score: {entry_score:+.2f} "
-            f"-> BLOCKED (weak counter-trend or below threshold)"
+            f"-> BLOCKED LONG (trend-only mode)"
         )
 
     if entry_score >= SCALP_ENTRY_THRESHOLD:

@@ -1,8 +1,8 @@
 """
 Kiểm soát sụt giảm tài khoản khẩn cấp (Drawdown Emergency Control).
 
-Mốc 1 (DD > 40%): partial_close_worst_orders — đóng lệnh lỗ nặng nhất.
-Mốc 2 (DD > 60%): panic_close_all — đóng toàn bộ, hủy lệnh chờ, dừng bot.
+Mốc 1 (DD > 15%): partial_close_worst_orders — đóng lệnh lỗ nặng nhất.
+Mốc 2 (DD > 25%): panic_close_all — đóng toàn bộ, hủy lệnh chờ, dừng bot.
 """
 
 from __future__ import annotations
@@ -18,8 +18,8 @@ from app.trading.execution import OrderExecutor
 
 logger = logging.getLogger(__name__)
 
-DD_PARTIAL_THRESHOLD_PCT = 40.0
-DD_PANIC_THRESHOLD_PCT = 60.0
+DD_PARTIAL_THRESHOLD_PCT = 15.0
+DD_PANIC_THRESHOLD_PCT = 25.0
 
 
 @dataclass
@@ -110,7 +110,7 @@ def partial_close_worst_orders(
     """
     Đóng lệnh có floating loss lớn nhất để giải phóng margin.
 
-    Gọi mỗi tick khi DD > 40%; lặp qua các tick tiếp theo cho đến khi DD hạ xuống.
+    Gọi mỗi tick khi DD > 15%; lặp qua các tick tiếp theo cho đến khi DD hạ xuống.
     """
     if not positions:
         return 0
@@ -149,7 +149,7 @@ def panic_close_all(
     """
     Hard cut — đóng toàn bộ vị thế, hủy lệnh chờ, dừng bot (giữ ~40% vốn).
 
-    Kích hoạt khi drawdown vượt 60%.
+    Kích hoạt khi drawdown vượt 25%.
     """
     closed = executor.close_all_for_bot(bot, reason="PANIC_DD")
     cancelled = mt5.cancel_pending_orders(bot.symbol, bot.magic_number)
