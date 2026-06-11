@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, RefreshCw, Search } from "lucide-react";
+import { ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   LogPnlCell,
@@ -14,7 +14,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Table,
@@ -26,15 +25,42 @@ import {
 } from "@/components/ui/table";
 import { api } from "@/lib/api";
 import { positionNotional } from "@/lib/trading";
-import type { OrderSide, TradeHistory } from "@/lib/types";
+import type { HistoryPnlFilter, OrderSide, TradeHistory } from "@/lib/types";
 import { formatLogDateTime, formatLogNumber } from "@/lib/utils";
 
-type DaysFilter = 7 | 30 | 90;
+type DaysFilter = 0 | 7 | 30 | 90;
 type SideFilter = "ALL" | OrderSide;
 type PageSize = 20 | 50 | 100;
 
-const selectClass =
-  "flex h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+/** ColorHunt-inspired accents */
+const filterSelectClass =
+  "flex h-9 rounded-md border-2 border-[#45B7D1]/40 bg-[#45B7D1]/5 px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#45B7D1]/50";
+
+function startOfTodayLocalIso() {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  return start.toISOString();
+}
+
+function buildHistoryQuery(
+  days: DaysFilter,
+  side: SideFilter,
+  pnl: HistoryPnlFilter,
+  page: number,
+  pageSize: PageSize,
+) {
+  const base = {
+    side: side === "ALL" ? undefined : side,
+    pnl: pnl === "ALL" ? undefined : pnl,
+    page,
+    page_size: pageSize,
+  } as const;
+
+  if (days === 0) {
+    return { ...base, since: startOfTodayLocalIso() };
+  }
+  return { ...base, days };
+}
 
 export function HistoryPage() {
   const [rows, setRows] = useState<TradeHistory[]>([]);
@@ -43,11 +69,10 @@ export function HistoryPage() {
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(0);
 
-  const [days, setDays] = useState<DaysFilter>(7);
+  const [days, setDays] = useState<DaysFilter>(0);
   const [side, setSide] = useState<SideFilter>("ALL");
+  const [pnl, setPnl] = useState<HistoryPnlFilter>("ALL");
   const [pageSize, setPageSize] = useState<PageSize>(20);
-  const [search, setSearch] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -55,25 +80,16 @@ export function HistoryPage() {
   const [message, setMessage] = useState("");
   const firstLoad = useRef(true);
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 400);
-    return () => window.clearTimeout(timer);
-  }, [search]);
-
   const loadHistory = useCallback(async () => {
-    const data = await api.getHistory({
-      days,
-      side: side === "ALL" ? undefined : side,
-      q: debouncedSearch || undefined,
-      page,
-      page_size: pageSize,
-    });
+    const data = await api.getHistory(
+      buildHistoryQuery(days, side, pnl, page, pageSize),
+    );
     setRows(data.items ?? []);
     setTotal(data.total ?? 0);
     setTotalPnl(data.total_pnl ?? 0);
     setPage(data.page ?? 1);
     setTotalPages(data.total_pages ?? 0);
-  }, [days, side, debouncedSearch, page, pageSize]);
+  }, [days, side, pnl, page, pageSize]);
 
   useEffect(() => {
     let cancelled = false;
@@ -139,6 +155,11 @@ export function HistoryPage() {
     setPage(1);
   }
 
+  function handlePnlChange(value: HistoryPnlFilter) {
+    setPnl(value);
+    setPage(1);
+  }
+
   function handlePageSizeChange(value: PageSize) {
     setPageSize(value);
     setPage(1);
@@ -158,13 +179,23 @@ export function HistoryPage() {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" disabled={busy} onClick={handleRefresh}>
+          <Button
+            variant="outline"
+            disabled={busy}
+            onClick={handleRefresh}
+            className="border-2 border-[#45B7D1]/50 bg-[#45B7D1]/10 text-[#0984e3] hover:bg-[#45B7D1]/20"
+          >
             <RefreshCw
               className={`mr-2 size-4 ${refreshing ? "animate-spin" : ""}`}
             />
             {refreshing ? "Đang tải…" : "Làm mới"}
           </Button>
-          <Button variant="outline" disabled={syncing} onClick={handleResync}>
+          <Button
+            variant="outline"
+            disabled={syncing}
+            onClick={handleResync}
+            className="border-2 border-[#FFEAA7]/80 bg-[#FFEAA7]/30 text-[#d35400] hover:bg-[#FFEAA7]/50"
+          >
             {syncing ? "Đang đồng bộ…" : "Đồng bộ P&L từ Exness"}
           </Button>
         </div>
@@ -192,13 +223,14 @@ export function HistoryPage() {
               <Label htmlFor="history-days">Khoảng ngày</Label>
               <select
                 id="history-days"
-                className={selectClass}
+                className={filterSelectClass}
                 value={days}
                 disabled={busy}
                 onChange={(e) =>
                   handleDaysChange(Number(e.target.value) as DaysFilter)
                 }
               >
+                <option value={0}>Hôm nay</option>
                 <option value={7}>7 ngày</option>
                 <option value={30}>30 ngày</option>
                 <option value={90}>90 ngày</option>
@@ -209,7 +241,7 @@ export function HistoryPage() {
               <Label htmlFor="history-side">Chiều lệnh</Label>
               <select
                 id="history-side"
-                className={selectClass}
+                className={filterSelectClass}
                 value={side}
                 disabled={busy}
                 onChange={(e) =>
@@ -223,10 +255,27 @@ export function HistoryPage() {
             </div>
 
             <div className="space-y-1.5">
+              <Label htmlFor="history-pnl">Lời / Lỗ</Label>
+              <select
+                id="history-pnl"
+                className={filterSelectClass}
+                value={pnl}
+                disabled={busy}
+                onChange={(e) =>
+                  handlePnlChange(e.target.value as HistoryPnlFilter)
+                }
+              >
+                <option value="ALL">Tất cả</option>
+                <option value="WIN">Lời</option>
+                <option value="LOSS">Lỗ</option>
+              </select>
+            </div>
+
+            <div className="space-y-1.5">
               <Label htmlFor="history-page-size">Số dòng / trang</Label>
               <select
                 id="history-page-size"
-                className={selectClass}
+                className={filterSelectClass}
                 value={pageSize}
                 disabled={busy}
                 onChange={(e) =>
@@ -237,24 +286,6 @@ export function HistoryPage() {
                 <option value={50}>50</option>
                 <option value={100}>100</option>
               </select>
-            </div>
-
-            <div className="min-w-[220px] flex-1 space-y-1.5">
-              <Label htmlFor="history-search">Tìm kiếm</Label>
-              <div className="relative">
-                <Search className="pointer-events-none absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
-                <Input
-                  id="history-search"
-                  className="pl-8"
-                  placeholder="Ticket, symbol, lý do đóng…"
-                  value={search}
-                  disabled={busy}
-                  onChange={(e) => {
-                    setSearch(e.target.value);
-                    setPage(1);
-                  }}
-                />
-              </div>
             </div>
           </div>
         </CardHeader>
@@ -329,6 +360,7 @@ export function HistoryPage() {
                 size="sm"
                 disabled={busy || page <= 1}
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
+                className="border-[#96CEB4]/60 bg-[#96CEB4]/15 hover:bg-[#96CEB4]/30"
               >
                 <ChevronLeft className="size-4" />
                 Trước
@@ -341,6 +373,7 @@ export function HistoryPage() {
                 size="sm"
                 disabled={busy || page >= totalPages || totalPages === 0}
                 onClick={() => setPage((p) => p + 1)}
+                className="border-[#96CEB4]/60 bg-[#96CEB4]/15 hover:bg-[#96CEB4]/30"
               >
                 Sau
                 <ChevronRight className="size-4" />

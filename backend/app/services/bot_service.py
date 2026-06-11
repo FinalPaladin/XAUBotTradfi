@@ -102,20 +102,35 @@ class BotService:
         self,
         *,
         days: int | None = None,
+        since: datetime | None = None,
         side: OrderSide | None = None,
+        pnl: str | None = None,
         search: str | None = None,
         page: int = 1,
         page_size: int = 20,
     ) -> dict[str, Any]:
-        """Filtered + paginated history (date range, side, ticket search)."""
+        """Filtered + paginated history (date range, side, P&L, ticket search)."""
         query = self.db.query(TradeHistory)
 
-        if days is not None and days > 0:
-            since = datetime.now(timezone.utc) - timedelta(days=days)
-            query = query.filter(TradeHistory.closed_at >= since)
+        if since is not None:
+            since_utc = since
+            if since_utc.tzinfo is None:
+                since_utc = since_utc.replace(tzinfo=timezone.utc)
+            else:
+                since_utc = since_utc.astimezone(timezone.utc)
+            query = query.filter(TradeHistory.closed_at >= since_utc)
+        elif days is not None and days > 0:
+            since_dt = datetime.now(timezone.utc) - timedelta(days=days)
+            query = query.filter(TradeHistory.closed_at >= since_dt)
 
         if side is not None:
             query = query.filter(TradeHistory.side == side)
+
+        pnl_key = (pnl or "").strip().upper()
+        if pnl_key == "WIN":
+            query = query.filter(TradeHistory.profit_loss > 0)
+        elif pnl_key == "LOSS":
+            query = query.filter(TradeHistory.profit_loss < 0)
 
         term = (search or "").strip()
         if term:
@@ -409,8 +424,14 @@ class BotService:
 
             if entry_deal is not None:
                 h.entry_price = round(float(entry_deal.price), 3)
+                h.opened_at = datetime.fromtimestamp(
+                    int(entry_deal.time), tz=timezone.utc
+                )
             h.exit_price = round(float(exit_deal.price), 3)
             h.profit_loss = round(float(exit_deal.profit), 2)
+            h.closed_at = datetime.fromtimestamp(
+                int(exit_deal.time), tz=timezone.utc
+            )
             updated += 1
 
         self.db.commit()

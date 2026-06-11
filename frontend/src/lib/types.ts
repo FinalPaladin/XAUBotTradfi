@@ -42,6 +42,11 @@ export interface BotConfig {
   single_tp_max_usd: number;
   single_tp_distance: number;
   hard_stop_adverse_distance: number;
+  max_basket_loss_usd: number;
+  max_basket_loss_pct: number;
+  counter_trend_max_layers: number;
+  atr_stop_multiplier: number;
+  basket_time_stop_minutes: number;
   created_at: string;
   updated_at: string;
 }
@@ -87,9 +92,13 @@ export interface TradeHistoryPage {
   total_pnl: number;
 }
 
+export type HistoryPnlFilter = "ALL" | "WIN" | "LOSS";
+
 export interface HistoryQuery {
   days?: number;
+  since?: string;
   side?: OrderSide;
+  pnl?: HistoryPnlFilter;
   q?: string;
   page?: number;
   page_size?: number;

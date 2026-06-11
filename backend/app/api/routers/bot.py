@@ -1,5 +1,7 @@
 """Bot configuration and control endpoints."""
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
@@ -41,16 +43,20 @@ def update_bot_config(
 @router.get("/history", response_model=TradeHistoryPageRead)
 def get_trade_history(
     days: int | None = Query(None, ge=1, le=365),
+    since: datetime | None = Query(None),
     side: OrderSide | None = None,
+    pnl: str | None = Query(None, pattern="^(WIN|LOSS|win|loss)$"),
     q: str | None = Query(None, max_length=64),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     db: Session = Depends(get_db),
 ) -> TradeHistoryPageRead:
-    """Lịch sử vị thế đã đóng — filter, search, phân trang."""
+    """Lịch sử vị thế đã đóng — filter, phân trang."""
     return BotService(db).list_history_page(
         days=days,
+        since=since,
         side=side,
+        pnl=pnl,
         search=q,
         page=page,
         page_size=page_size,

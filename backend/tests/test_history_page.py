@@ -80,6 +80,25 @@ def test_history_page_side_filter(db: Session) -> None:
     assert result["items"][0].side == OrderSide.SELL
 
 
+def test_history_page_pnl_filter_win(db: Session) -> None:
+    result = BotService(db).list_history_page(days=90, pnl="WIN", page=1, page_size=20)
+    assert result["total"] == 2
+    assert all(h.profit_loss > 0 for h in result["items"])
+
+
+def test_history_page_pnl_filter_loss(db: Session) -> None:
+    result = BotService(db).list_history_page(days=90, pnl="LOSS", page=1, page_size=20)
+    assert result["total"] == 1
+    assert result["items"][0].profit_loss < 0
+
+
+def test_history_page_since_today(db: Session) -> None:
+    now = datetime.now(timezone.utc)
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    result = BotService(db).list_history_page(since=start, page=1, page_size=20)
+    assert result["total"] == 0
+
+
 def test_history_page_search_ticket(db: Session) -> None:
     result = BotService(db).list_history_page(days=90, search="333", page=1, page_size=20)
     assert result["total"] == 1

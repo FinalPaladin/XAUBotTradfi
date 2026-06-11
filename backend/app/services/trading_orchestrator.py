@@ -13,6 +13,7 @@ from app.trading.basket_manager import (
     BasketContext,
     build_position_basket,
     calculate_net_pnl_usd,
+    check_position_dca_layer_tp,
     effective_max_layers,
     evaluate_basket,
     should_add_dca_layer,
@@ -119,6 +120,17 @@ class TradingOrchestrator:
 
             account_balance = resolve_account_balance(self._mt5.account_equity())
             price = self._market.current_price(bot.symbol)
+
+            sync_stats = self._executor.sync_positions_with_mt5(bot)
+            if sync_stats["imported"] or sync_stats["reconciled"]:
+                log_message(
+                    self.db,
+                    f"MT5 sync: imported={sync_stats['imported']} "
+                    f"reconciled={sync_stats['reconciled']}",
+                    bot_id=bot.id,
+                    source="execution",
+                )
+
             open_positions = (
                 self.db.query(TradePosition)
                 .filter(TradePosition.bot_id == bot.id)
@@ -206,6 +218,12 @@ class TradingOrchestrator:
                 if basket is None:
                     continue
 
+                if basket.is_multi_layer:
+                    for pos in side_positions:
+                        if (getattr(pos, "layer_index", 0) or 0) == 0:
+                            if pos.current_tp is not None:
+                                self._executor.strip_broker_tp(pos)
+
                 decision = evaluate_basket(
                     bot,
                     basket,
@@ -237,7 +255,33 @@ class TradingOrchestrator:
                     }
 
                 for pos in side_positions:
-                    pos_decision = evaluate_position(bot, pos, price, signal)
+                    if check_position_dca_layer_tp(
+                        bot, pos, price, account_balance
+                    ):
+                        self._executor.close_position(bot, pos, "DCA_LAYER_TP")
+                        log_message(
+                            self.db,
+                            f"DCA layer TP close ticket={pos.ticket_id} "
+                            f"layer={(pos.layer_index or 0) + 1}",
+                            bot_id=bot.id,
+                            source="execution",
+                        )
+                        self.db.commit()
+                        return {
+                            "summary": make_summary(
+                                action=f"DCA TP lớp {(pos.layer_index or 0) + 1} "
+                                f"ticket={pos.ticket_id}"
+                            )
+                        }
+
+                    pos_decision = evaluate_position(
+                        bot,
+                        pos,
+                        price,
+                        signal,
+                        account_balance=account_balance,
+                        basket_is_multi_layer=basket.is_multi_layer,
+                    )
                     if pos_decision.action != PositionAction.HOLD:
                         self._apply_decision(bot, pos, pos_decision, price)
                         self.db.commit()
@@ -257,6 +301,7 @@ class TradingOrchestrator:
                         price,
                         ctx=basket_ctx,
                         net_pnl_usd=net_pnl,
+                        account_balance=account_balance,
                     )
                     and basket.layer_count < side_max_layers
                 ):

@@ -8,16 +8,145 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app.models import BotConfig, OrderSide, TradeHistory, TradePosition
-from app.services.mt5_client import POSITION_NOT_FOUND, CloseFillResult, get_mt5_client
+from app.services.mt5_client import POSITION_NOT_FOUND, CloseFillResult, get_mt5_client, symbol_candidates
+from app.trading.datetime_utils import coerce_utc, utc_now
 from app.trading.types import OrderPlan
 
 logger = logging.getLogger(__name__)
+
+
+def _position_matches_bot_symbol(pos_symbol: str, bot_symbol: str) -> bool:
+    """True when MT5 position symbol matches configured bot symbol (incl. aliases)."""
+    normalized = pos_symbol.upper().replace("+", "").rstrip(".")
+    for cand in symbol_candidates(bot_symbol):
+        c = cand.upper().replace("+", "").rstrip(".")
+        if normalized == c or normalized.startswith(c) or c.startswith(normalized):
+            return True
+    return False
 
 
 class OrderExecutor:
     def __init__(self, db: Session, client=None) -> None:
         self.db = db
         self._client = client or get_mt5_client()
+
+    def sync_positions_with_mt5(self, bot: BotConfig) -> dict[str, int]:
+        """
+        P0: Đồng bộ DB ↔ MT5 — reconcile lệnh đã đóng, import lệnh mồ côi trên MT5.
+        """
+        try:
+            import MetaTrader5 as mt5
+        except ImportError:
+            return {"imported": 0, "reconciled": 0}
+
+        mt5_positions = [
+            p
+            for p in self._client.positions_get(symbol=None, magic=bot.magic_number)
+            if _position_matches_bot_symbol(p.symbol, bot.symbol)
+        ]
+        db_positions = (
+            self.db.query(TradePosition)
+            .filter(TradePosition.bot_id == bot.id)
+            .all()
+        )
+
+        mt5_by_ticket = {str(p.ticket): p for p in mt5_positions}
+        imported = 0
+        reconciled = 0
+
+        for pos in list(db_positions):
+            if pos.ticket_id in mt5_by_ticket:
+                continue
+            ticket = int(pos.ticket_id)
+            if self._client.position_is_open(ticket):
+                logger.debug(
+                    "MT5 sync skip ticket=%s — still open on MT5",
+                    pos.ticket_id,
+                )
+                continue
+            try:
+                self._reconcile_stale_position(bot, pos, "MT5_SYNC_CLOSED")
+                reconciled += 1
+            except Exception:
+                logger.exception("sync reconcile failed ticket=%s", pos.ticket_id)
+
+        db_tickets = {
+            p.ticket_id
+            for p in self.db.query(TradePosition)
+            .filter(TradePosition.bot_id == bot.id)
+            .all()
+        }
+
+        for ticket, mp in mt5_by_ticket.items():
+            if ticket in db_tickets:
+                continue
+            side = (
+                OrderSide.BUY
+                if mp.type == mt5.POSITION_TYPE_BUY
+                else OrderSide.SELL
+            )
+            same_side_db = [
+                p
+                for p in self.db.query(TradePosition)
+                .filter(
+                    TradePosition.bot_id == bot.id,
+                    TradePosition.side == side,
+                )
+                .all()
+            ]
+            same_side_mt5 = [
+                p
+                for p in mt5_by_ticket.values()
+                if p.type
+                == (
+                    mt5.POSITION_TYPE_BUY
+                    if side == OrderSide.BUY
+                    else mt5.POSITION_TYPE_SELL
+                )
+            ]
+            layer_index = len(same_side_db)
+            if same_side_db:
+                anchor = min(
+                    p.basket_anchor_price or p.entry_price for p in same_side_db
+                )
+            elif same_side_mt5:
+                anchor = min(p.price_open for p in same_side_mt5)
+            else:
+                anchor = mp.price_open
+
+            entry_price = self._client.position_entry_price(int(ticket)) or mp.price_open
+            pos = TradePosition(
+                bot_id=bot.id,
+                ticket_id=ticket,
+                symbol=bot.symbol,
+                side=side,
+                volume=float(mp.volume),
+                entry_price=float(entry_price),
+                current_sl=float(mp.sl) if mp.sl else None,
+                current_tp=float(mp.tp) if mp.tp else None,
+                highest_price=float(entry_price) if side == OrderSide.BUY else None,
+                lowest_price=float(entry_price) if side == OrderSide.SELL else None,
+                layer_index=layer_index,
+                basket_anchor_price=float(anchor),
+                opened_at=utc_now(),
+            )
+            self.db.add(pos)
+            imported += 1
+
+        if imported or reconciled:
+            self.db.flush()
+        return {"imported": imported, "reconciled": reconciled}
+
+    def strip_broker_tp(self, position: TradePosition) -> bool:
+        """P1: Gỡ TP/SL broker trên lớp 1 khi basket đã multi-layer."""
+        if position.current_tp is None and position.current_sl is None:
+            return False
+        ok, _ = self._client.position_modify(int(position.ticket_id), 0.0, 0.0)
+        if ok:
+            position.current_tp = None
+            position.current_sl = None
+            self.db.flush()
+        return ok
 
     def _mt5_open_count(self, symbol: str, magic: int, side: OrderSide) -> int:
         """Count MT5 open positions for symbol/magic on one side."""
@@ -88,6 +217,7 @@ class OrderExecutor:
             lowest_price=entry_price if plan.side == OrderSide.SELL else None,
             layer_index=plan.layer_index,
             basket_anchor_price=plan.basket_anchor_price or entry_price,
+            opened_at=utc_now(),
         )
         self.db.add(pos)
         self.db.flush()
@@ -161,8 +291,8 @@ class OrderExecutor:
             exit_price=round(exit_px, 3),
             profit_loss=pnl,
             close_reason=reason,
-            opened_at=position.opened_at,
-            closed_at=datetime.now(timezone.utc),
+            opened_at=coerce_utc(position.opened_at),
+            closed_at=utc_now(),
         )
         self.db.add(history)
         self.db.delete(position)
@@ -203,7 +333,9 @@ class OrderExecutor:
         """Remove DB row when MT5 no longer has the position (manual close on terminal)."""
         ticket = int(position.ticket_id)
         if self._client.position_is_open(ticket):
-            raise RuntimeError(POSITION_NOT_FOUND)
+            raise RuntimeError(
+                f"Cannot reconcile ticket={position.ticket_id}: still open on MT5"
+            )
 
         logger.warning(
             "MT5 ticket=%s already closed — reconciling DB (reason=%s)",

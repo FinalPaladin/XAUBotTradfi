@@ -88,8 +88,11 @@ class BotConfig(Base):
     max_basket_loss_usd: Mapped[float] = mapped_column(
         Float, default=10.0, nullable=False
     )
+    max_basket_loss_pct: Mapped[float] = mapped_column(
+        Float, default=20.0, nullable=False
+    )
     counter_trend_max_layers: Mapped[int] = mapped_column(
-        Integer, default=1, nullable=False
+        Integer, default=5, nullable=False
     )
     atr_stop_multiplier: Mapped[float] = mapped_column(
         Float, default=2.0, nullable=False

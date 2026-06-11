@@ -228,17 +228,39 @@ def effective_max_layers(
     return base
 
 
-def resolve_max_basket_loss_usd(
+def calculate_layer_pnl_usd(layer: PositionLayer, current_price: float) -> float:
+    """P&L chưa thực hiện của một lớp trong basket."""
+    if layer.side == OrderSide.BUY:
+        return round((current_price - layer.entry_price) * layer.volume * 100, 2)
+    return round((layer.entry_price - current_price) * layer.volume * 100, 2)
+
+
+def resolve_max_basket_loss_limit(
     config: BotConfig,
     account_balance: float | None = None,
 ) -> float:
-    """P0: cap USD loss per basket (scaled lightly with balance)."""
-    base = getattr(config, "max_basket_loss_usd", 10.0) or 10.0
+    """
+    Ngưỡng lỗ tối đa basket — ưu tiên % balance (max_basket_loss_pct),
+    fallback legacy USD scaled theo vốn.
+    """
     balance = account_balance or getattr(config, "base_equity_usd", None) or 200.0
+    pct = getattr(config, "max_basket_loss_pct", None)
+    if pct is not None and pct > 0:
+        return round(balance * pct / 100.0, 2)
+
+    base = getattr(config, "max_basket_loss_usd", 10.0) or 10.0
     ref_raw = getattr(config, "base_equity_usd", None)
     ref = ref_raw if ref_raw and ref_raw > 0 else 200.0
     scale = max(balance / ref, 1.0)
     return round(base * scale, 2)
+
+
+def resolve_max_basket_loss_usd(
+    config: BotConfig,
+    account_balance: float | None = None,
+) -> float:
+    """Alias — dùng resolve_max_basket_loss_limit."""
+    return resolve_max_basket_loss_limit(config, account_balance)
 
 
 # ---------------------------------------------------------------------------
@@ -299,16 +321,56 @@ def check_hard_stop_loss(
     return adverse >= limit
 
 
-def check_max_basket_loss_usd(
+def check_per_layer_dca_tp(
+    config: BotConfig,
+    layer: PositionLayer,
+    current_price: float,
+    account_balance: float | None = None,
+) -> bool:
+    """P1: đóng riêng lớp DCA (layer_index >= 1) khi đạt scalp TP min."""
+    if layer.layer_index < 1:
+        return False
+    pnl = calculate_layer_pnl_usd(layer, current_price)
+    balance = account_balance or config.base_equity_usd or 200.0
+    tp_min = resolve_single_tp_min(config, balance)
+    return pnl >= tp_min
+
+
+def check_position_dca_layer_tp(
+    config: BotConfig,
+    position: TradePosition,
+    current_price: float,
+    account_balance: float | None = None,
+) -> bool:
+    """Wrapper per-ticket cho orchestrator."""
+    layer_index = getattr(position, "layer_index", 0) or 0
+    if layer_index < 1:
+        return False
+    layer = PositionLayer(
+        ticket_id=position.ticket_id,
+        side=position.side,
+        volume=position.volume,
+        entry_price=position.entry_price,
+        layer_index=layer_index,
+        opened_at=position.opened_at,
+    )
+    return check_per_layer_dca_tp(config, layer, current_price, account_balance)
+
+
+def check_max_basket_loss(
     config: BotConfig,
     basket: PositionBasket,
     current_price: float,
     account_balance: float | None = None,
 ) -> bool:
-    """P0: đóng basket khi floating loss vượt cap USD."""
+    """Đóng basket khi floating loss vượt cap (% balance hoặc legacy USD)."""
     net_pnl = calculate_net_pnl_usd(basket, current_price)
-    limit = resolve_max_basket_loss_usd(config, account_balance)
+    limit = resolve_max_basket_loss_limit(config, account_balance)
     return net_pnl <= -limit
+
+
+# Backward-compatible alias for tests / legacy imports
+check_max_basket_loss_usd = check_max_basket_loss
 
 
 def check_atr_stop(
@@ -383,14 +445,14 @@ def should_add_dca_layer(
     *,
     ctx: BasketContext | None = None,
     net_pnl_usd: float | None = None,
+    account_balance: float | None = None,
 ) -> bool:
     """
-    Logic DCA: nhồi lớp tiếp theo khi giá chạy ngược đủ xa (thuận trend only).
+    Logic DCA: nhồi lớp tiếp theo khi giá chạy ngược đủ xa.
 
-    P0: cấm DCA ngược H1; hủy DCA khi lỗ > 50% max_basket_loss.
-    P3: spacing phải nằm trong [min, max]; spacing > max = trend chạy quá nhanh.
+    P0 catch-up: spacing >= min là đủ (bỏ chặn spacing > max khi giá nhảy nhanh).
+    Hủy DCA khi lỗ > 50% max basket loss limit.
     """
-    trend = ctx.main_trend if ctx else MainTrend.NEUTRAL
     max_layers = (
         effective_max_layers(config, basket, ctx)
         if ctx
@@ -403,21 +465,15 @@ def should_add_dca_layer(
     if check_hard_stop_loss(config, basket, current_price):
         return False
 
-    if is_basket_counter_trend(basket, trend):
-        return False
-
     if net_pnl_usd is not None:
-        max_loss = resolve_max_basket_loss_usd(config)
+        max_loss = resolve_max_basket_loss_limit(config, account_balance)
         if net_pnl_usd <= -max_loss * 0.5:
             return False
 
     spacing = calculate_layer_spacing_distance(basket, current_price)
-    spacing_min = getattr(config, "layer_spacing_min", 5.0) or 5.0
-    spacing_max = getattr(config, "layer_spacing_max", 7.0) or 7.0
+    spacing_min = getattr(config, "layer_spacing_min", 6.0) or 6.0
 
     if spacing < spacing_min:
-        return False
-    if spacing > spacing_max:
         return False
 
     return True
@@ -476,10 +532,16 @@ def evaluate_basket(
             meta=meta,
         )
 
-    if check_max_basket_loss_usd(config, basket, current_price, account_balance):
+    if check_max_basket_loss(config, basket, current_price, account_balance):
+        pct = getattr(config, "max_basket_loss_pct", None)
+        reason = (
+            BasketAction.CLOSE_MAX_PCT_LOSS
+            if pct is not None and pct > 0
+            else BasketAction.CLOSE_MAX_USD_LOSS
+        )
         return BasketDecision(
-            BasketAction.CLOSE_MAX_USD_LOSS,
-            close_reason="MAX_USD_LOSS",
+            reason,
+            close_reason="MAX_BASKET_LOSS",
             meta=meta,
         )
 

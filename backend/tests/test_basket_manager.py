@@ -49,6 +49,7 @@ def dca_config() -> BotConfig:
         base_equity_usd=200.0,
         hard_stop_adverse_distance=12.0,
         max_basket_loss_usd=10.0,
+        max_basket_loss_pct=0.0,
         counter_trend_max_layers=1,
         atr_stop_multiplier=2.0,
         basket_time_stop_minutes=60,
@@ -140,12 +141,38 @@ def test_dca_blocked_counter_trend(dca_config: BotConfig) -> None:
     )
 
 
-def test_dca_blocked_when_spacing_exceeds_max(dca_config: BotConfig) -> None:
+def test_dca_catch_up_when_spacing_exceeds_max(dca_config: BotConfig) -> None:
+    """P0: spacing > layer_spacing_max vẫn nhồi DCA khi >= min."""
     basket = _basket_buy([(2650.0, 0.02)])
     ctx = BasketContext(main_trend=MainTrend.BULLISH)
-    assert not should_add_dca_layer(
+    assert should_add_dca_layer(
         dca_config, basket, 2640.0, ctx=ctx, net_pnl_usd=0.0
     )
+
+
+def test_max_basket_loss_pct(dca_config: BotConfig) -> None:
+    dca_config.max_basket_loss_pct = 20.0
+    basket = _basket_buy([(2650.0, 0.02)])
+    assert not check_max_basket_loss_usd(
+        dca_config, basket, 2640.0, account_balance=200.0
+    )
+    assert check_max_basket_loss_usd(
+        dca_config, basket, 2630.0, account_balance=200.0
+    )
+
+
+def test_per_layer_dca_tp(dca_config: BotConfig) -> None:
+    from app.trading.basket_manager import check_per_layer_dca_tp
+
+    layer = PositionLayer(
+        ticket_id="2",
+        side=OrderSide.SELL,
+        volume=0.02,
+        entry_price=2650.0,
+        layer_index=1,
+    )
+    assert not check_per_layer_dca_tp(dca_config, layer, 2649.6, 200.0)
+    assert check_per_layer_dca_tp(dca_config, layer, 2648.5, 200.0)
 
 
 def test_max_basket_loss_usd(dca_config: BotConfig) -> None:

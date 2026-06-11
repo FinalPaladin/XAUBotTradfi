@@ -162,6 +162,11 @@ export function BotConfigPage() {
           {num("single_tp_max_usd", "Scalp TP max — thuận xu thế (USD)", "0.1")}
           {num("single_tp_distance", "Scalp TP fallback (giá Vàng)")}
           {num("hard_stop_adverse_distance", "Hard stop adverse (giá Vàng)")}
+          {num("max_basket_loss_pct", "Max lỗ basket (% balance)", "0.1")}
+          {num("max_basket_loss_usd", "Max lỗ basket legacy (USD)", "0.1")}
+          {num("counter_trend_max_layers", "Max lớp DCA ngược trend", "1")}
+          {num("atr_stop_multiplier", "ATR stop multiplier", "0.1")}
+          {num("basket_time_stop_minutes", "Time stop (phút)", "1")}
         </CardContent>
       </Card>
 

@@ -2,6 +2,10 @@
 
 Hệ thống quản lý Bot Trade **XAUUSD** trên **Bybit TradFi (MT5)** — backend FastAPI, worker Windows + MT5, giao diện React.
 
+## Tài liệu
+
+- [Hướng dẫn chạy local — API, Worker, UI](docs/RUNNING_GUIDE.md)
+
 ## Cấu trúc dự án
 
 ```

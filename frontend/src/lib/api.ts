@@ -54,7 +54,9 @@ export const api = {
   getHistory: async (params: HistoryQuery = {}) => {
     const sp = new URLSearchParams();
     if (params.days != null) sp.set("days", String(params.days));
+    if (params.since) sp.set("since", params.since);
     if (params.side) sp.set("side", params.side);
+    if (params.pnl && params.pnl !== "ALL") sp.set("pnl", params.pnl);
     if (params.q) sp.set("q", params.q);
     if (params.page != null) sp.set("page", String(params.page));
     if (params.page_size != null) sp.set("page_size", String(params.page_size));

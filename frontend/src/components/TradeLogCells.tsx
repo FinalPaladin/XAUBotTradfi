@@ -13,8 +13,12 @@ export function PositionSideCell({
     <div className="space-y-1">
       <div className="font-semibold text-foreground">{symbol}</div>
       <Badge
-        variant={side === "BUY" ? "success" : "destructive"}
-        className="text-xs font-normal"
+        className={cn(
+          "border-0 text-xs font-semibold text-white",
+          side === "BUY"
+            ? "bg-[#4ECDC4] hover:bg-[#4ECDC4]/90"
+            : "bg-[#FF6B6B] hover:bg-[#FF6B6B]/90",
+        )}
       >
         {sideLabel(side)}
       </Badge>
@@ -30,8 +34,8 @@ export function LogPnlCell({ value }: { value: number | null }) {
     <span
       className={cn(
         "font-semibold tabular-nums text-foreground",
-        value > 0 && "text-emerald-600",
-        value < 0 && "text-red-600",
+        value > 0 && "text-[#00b894]",
+        value < 0 && "text-[#d63031]",
       )}
     >
       {formatLogNumber(value)}

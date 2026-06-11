@@ -12,8 +12,18 @@ export function formatLogNumber(value: number, digits = 2) {
   }).format(value);
 }
 
+/** Parse API datetime — UTC (+00:00/Z) → local; naive → local wall-clock. */
+export function parseServerDateTime(iso: string) {
+  const trimmed = iso.trim();
+  const hasTz = /[Zz]$|[+-]\d{2}:\d{2}$/.test(trimmed);
+  if (hasTz) {
+    return new Date(trimmed);
+  }
+  return new Date(trimmed);
+}
+
 export function formatLogDateTime(iso: string) {
-  const d = new Date(iso);
+  const d = parseServerDateTime(iso);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }

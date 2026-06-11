@@ -435,7 +435,7 @@ def _slice_bars(df: pd.DataFrame, end_time: pd.Timestamp, lookback: int) -> pd.D
 
 def _apply_drawdown_guard(state: BacktestState, price: float) -> bool:
     """
-    Mô phỏng drawdown_guard: partial close @ 15%, panic close @ 25%.
+    Mô phỏng drawdown_guard: partial close @ 15%, panic close @ 20%.
     Trả về True nếu panic (dừng mở lệnh mới trong tick đó — xử lý bên ngoài).
     """
     floating = _total_floating_pnl(state.positions, price)
@@ -487,6 +487,7 @@ def _process_basket_side(
             price,
             ctx=ctx,
             net_pnl_usd=net_pnl,
+            account_balance=state.balance,
         )
         and basket.layer_count < side_max_layers
     ):

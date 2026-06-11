@@ -2,7 +2,9 @@
 
 from collections.abc import Generator
 
-from sqlalchemy import create_engine
+from datetime import datetime, timezone
+
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import get_settings
@@ -22,6 +24,19 @@ else:
     _engine_kwargs["pool_recycle"] = 3600
 
 engine = create_engine(settings.database_url, **_engine_kwargs)
+
+
+@event.listens_for(engine, "connect")
+def _set_mysql_utc_timezone(dbapi_connection, _connection_record) -> None:
+    """MySQL NOW() / func.now() theo UTC — tránh lệch opened_at vs closed_at."""
+    if engine.dialect.name != "mysql":
+        return
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("SET time_zone = '+00:00'")
+    finally:
+        cursor.close()
+
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -91,7 +106,8 @@ def _migrate_bot_config_columns() -> None:
         ("single_tp_max_usd", "FLOAT NOT NULL DEFAULT 2.0"),
         ("hard_stop_adverse_distance", "FLOAT NOT NULL DEFAULT 12.0"),
         ("max_basket_loss_usd", "FLOAT NOT NULL DEFAULT 10.0"),
-        ("counter_trend_max_layers", "INT NOT NULL DEFAULT 1"),
+        ("max_basket_loss_pct", "FLOAT NOT NULL DEFAULT 20.0"),
+        ("counter_trend_max_layers", "INT NOT NULL DEFAULT 5"),
         ("atr_stop_multiplier", "FLOAT NOT NULL DEFAULT 2.0"),
         ("basket_time_stop_minutes", "INT NOT NULL DEFAULT 60"),
         ("ema_period", "INT NOT NULL DEFAULT 21"),
@@ -151,8 +167,22 @@ def _migrate_risk_tuning() -> None:
         if "counter_trend_max_layers" in existing:
             conn.execute(
                 text(
-                    "UPDATE bot_config SET counter_trend_max_layers = 1 "
-                    "WHERE counter_trend_max_layers IS NULL OR counter_trend_max_layers <= 0"
+                    "UPDATE bot_config SET counter_trend_max_layers = 5 "
+                    "WHERE counter_trend_max_layers IS NULL OR counter_trend_max_layers <= 1"
+                )
+            )
+        if "max_basket_loss_pct" in existing:
+            conn.execute(
+                text(
+                    "UPDATE bot_config SET max_basket_loss_pct = 20.0 "
+                    "WHERE max_basket_loss_pct IS NULL OR max_basket_loss_pct <= 0"
+                )
+            )
+        if "layer_spacing_min" in existing:
+            conn.execute(
+                text(
+                    "UPDATE bot_config SET layer_spacing_min = 6.0 "
+                    "WHERE layer_spacing_min < 6.0"
                 )
             )
 
@@ -195,6 +225,31 @@ def _migrate_trade_history_dedupe() -> None:
             )
 
 
+def _migrate_history_opened_at_utc() -> None:
+    """Chuẩn hóa opened_at legacy (naive VN) → UTC trong trade_history."""
+    from sqlalchemy import inspect
+
+    from app.models import TradeHistory
+    from app.trading.datetime_utils import coerce_utc
+
+    insp = inspect(engine)
+    if "trade_history" not in insp.get_table_names():
+        return
+
+    with SessionLocal() as db:
+        rows = db.query(TradeHistory).all()
+        changed = 0
+        for row in rows:
+            if row.opened_at.tzinfo is None:
+                row.opened_at = coerce_utc(row.opened_at)
+                changed += 1
+            elif row.closed_at.tzinfo is None:
+                row.closed_at = coerce_utc(row.closed_at)
+                changed += 1
+        if changed:
+            db.commit()
+
+
 def init_db() -> None:
     """Create tables if missing and seed default bot config when empty."""
     from app import models  # noqa: F401 — register models with Base.metadata
@@ -204,6 +259,7 @@ def init_db() -> None:
     _migrate_bot_config_columns()
     _migrate_risk_tuning()
     _migrate_trade_history_dedupe()
+    _migrate_history_opened_at_utc()
     with SessionLocal() as db:
         if seed_if_empty(db):
             db.commit()
