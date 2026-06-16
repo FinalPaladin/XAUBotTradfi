@@ -252,6 +252,54 @@ def _migrate_trade_history_dedupe() -> None:
             )
 
 
+def _migrate_dca_strategy_v2() -> None:
+    """Cập nhật config DCA: 5 giá spacing, tối đa 5 lớp, cắt lỗ 50 USD."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if "bot_config" not in insp.get_table_names():
+        return
+
+    existing = {c["name"] for c in insp.get_columns("bot_config")}
+    if "max_layers" not in existing:
+        return
+
+    with engine.begin() as conn:
+        if engine.dialect.name == "mysql":
+            conn.execute(
+                text(
+                    "UPDATE bot_config SET "
+                    "max_layers = 5, "
+                    "max_open_positions = GREATEST(max_open_positions, 5), "
+                    "layer_spacing_min = 5.0, "
+                    "max_basket_loss_usd = 50.0, "
+                    "max_basket_loss_pct = 0, "
+                    "counter_trend_max_layers = 5 "
+                    "WHERE max_layers <= 2 "
+                    "OR max_basket_loss_usd <= 10 "
+                    "OR layer_spacing_min >= 6.0 "
+                    "OR counter_trend_max_layers <= 1"
+                )
+            )
+        else:
+            conn.execute(
+                text(
+                    "UPDATE bot_config SET "
+                    "max_layers = 5, "
+                    "max_open_positions = CASE WHEN max_open_positions < 5 "
+                    "THEN 5 ELSE max_open_positions END, "
+                    "layer_spacing_min = 5.0, "
+                    "max_basket_loss_usd = 50.0, "
+                    "max_basket_loss_pct = 0, "
+                    "counter_trend_max_layers = 5 "
+                    "WHERE max_layers <= 2 "
+                    "OR max_basket_loss_usd <= 10 "
+                    "OR layer_spacing_min >= 6.0 "
+                    "OR counter_trend_max_layers <= 1"
+                )
+            )
+
+
 def _migrate_fix_history_opened_at_shift() -> None:
     """Sửa opened_at bị lệch -7h do coerce_utc cũ (coi naive = VN trên MySQL UTC)."""
     from datetime import timedelta
@@ -287,6 +335,7 @@ def init_db() -> None:
     _migrate_bot_config_columns()
     _migrate_risk_tuning()
     _migrate_trade_history_dedupe()
+    _migrate_dca_strategy_v2()
     _migrate_fix_history_opened_at_shift()
     with SessionLocal() as db:
         if seed_if_empty(db):

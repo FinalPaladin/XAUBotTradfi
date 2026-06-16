@@ -276,24 +276,38 @@ class TradingOrchestrator:
 
                 if decision.action != BasketAction.HOLD:
                     reason = decision.close_reason or decision.action.value
-                    self._executor.close_basket(bot, side_positions, reason)
                     pnl = decision.meta.get("net_pnl_usd")
-                    log_message(
-                        self.db,
-                        f"Joint close {basket.layer_count} {side.value} layers "
-                        f"reason={reason} pnl={pnl} USD",
-                        bot_id=bot.id,
-                        source="execution",
-                    )
-                    self.db.commit()
-                    return {
-                        "summary": make_summary(
-                            action=(
-                                f"JOINT CLOSE {basket.layer_count} {side.value} — "
-                                f"{reason} P&L={pnl} USD"
-                            )
+                    if decision.action == BasketAction.CLOSE_PANIC_SIGNAL:
+                        closed = self._executor.close_all_for_bot(
+                            bot, reason=reason
                         )
-                    }
+                        log_message(
+                            self.db,
+                            f"PANIC SIGNAL close all — score={basket_ctx.entry_score:+.2f} "
+                            f"closed={closed} pnl={pnl} USD",
+                            bot_id=bot.id,
+                            level=LogLevel.WARNING,
+                            source="execution",
+                        )
+                        action_label = (
+                            f"PANIC SIGNAL — đóng {closed} lệnh "
+                            f"(M5={basket_ctx.entry_score:+.2f}) P&L={pnl} USD"
+                        )
+                    else:
+                        self._executor.close_basket(bot, side_positions, reason)
+                        log_message(
+                            self.db,
+                            f"Joint close {basket.layer_count} {side.value} layers "
+                            f"reason={reason} pnl={pnl} USD",
+                            bot_id=bot.id,
+                            source="execution",
+                        )
+                        action_label = (
+                            f"JOINT CLOSE {basket.layer_count} {side.value} — "
+                            f"{reason} P&L={pnl} USD"
+                        )
+                    self.db.commit()
+                    return {"summary": make_summary(action=action_label)}
 
                 for pos in side_positions:
                     if check_position_dca_layer_tp(

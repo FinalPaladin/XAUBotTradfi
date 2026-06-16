@@ -86,7 +86,7 @@ class BotConfigUpdate(BaseModel):
     single_tp_distance: float | None = Field(None, ge=0.1, le=20)
     hard_stop_adverse_distance: float | None = Field(None, ge=5, le=200)
     max_basket_loss_usd: float | None = Field(None, ge=1, le=10000)
-    max_basket_loss_pct: float | None = Field(None, ge=1, le=100)
+    max_basket_loss_pct: float | None = Field(None, ge=0, le=100)
     counter_trend_max_layers: int | None = Field(None, ge=1, le=10)
     atr_stop_multiplier: float | None = Field(None, ge=0.5, le=10)
     basket_time_stop_minutes: int | None = Field(None, ge=5, le=1440)

@@ -17,6 +17,7 @@ from app.trading.basket_manager import (
     check_joint_take_profit,
     check_max_basket_loss_usd,
     check_m5_reversal_exit,
+    check_panic_signal_exit,
     check_single_layer_scalp_tp,
     check_trend_flip_exit,
     effective_max_layers,
@@ -196,6 +197,35 @@ def test_m5_reversal_exit_short_underwater() -> None:
         entry_score=0.6,
     )
     assert check_m5_reversal_exit(basket, ctx, net_pnl=-2.0)
+
+
+def test_panic_signal_exit_long_basket_strong_sell() -> None:
+    basket = _basket_buy([(2650.0, 0.02)])
+    ctx = BasketContext(main_trend=MainTrend.BULLISH, entry_score=-0.85)
+    assert check_panic_signal_exit(basket, ctx)
+    assert not check_panic_signal_exit(
+        basket, BasketContext(main_trend=MainTrend.BULLISH, entry_score=-0.7)
+    )
+
+
+def test_panic_signal_exit_short_basket_strong_buy() -> None:
+    basket = _basket_sell([(2650.0, 0.02)])
+    ctx = BasketContext(main_trend=MainTrend.BEARISH, entry_score=0.85)
+    assert check_panic_signal_exit(basket, ctx)
+
+
+def test_evaluate_basket_panic_signal_priority(dca_config: BotConfig) -> None:
+    basket = _basket_buy([(2650.0, 0.02), (2645.0, 0.027)])
+    ctx = BasketContext(main_trend=MainTrend.BULLISH, entry_score=-0.9)
+    decision = evaluate_basket(
+        dca_config,
+        basket,
+        2648.0,
+        AggregatedSignal([], 0.0, int(NetSignal.HOLD)),
+        ctx=ctx,
+    )
+    assert decision.action == BasketAction.CLOSE_PANIC_SIGNAL
+    assert decision.close_reason == "PANIC_SIGNAL"
 
 
 def test_evaluate_basket_trend_flip_priority(dca_config: BotConfig) -> None:

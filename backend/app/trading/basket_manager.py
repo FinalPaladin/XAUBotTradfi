@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 
 from app.models import BotConfig, OrderSide, TradePosition
 from app.trading.risk import resolve_basket_tp_min, resolve_single_tp_min
-from app.trading.signal_engine import MainTrend
+from app.trading.signal_engine import SCALP_ENTRY_THRESHOLD, MainTrend
 from app.trading.types import AggregatedSignal, BasketAction, BasketDecision, NetSignal
 
 # Exit / DCA guard constants (P2)
@@ -463,6 +463,24 @@ def check_trend_flip_exit(
     return False
 
 
+def check_panic_signal_exit(
+    basket: PositionBasket,
+    ctx: BasketContext,
+    *,
+    threshold: float = SCALP_ENTRY_THRESHOLD,
+) -> bool:
+    """
+    Tín hiệu M5 panic ngược chiều basket — đóng hết mọi lớp ngay.
+
+    Long basket + score <= -0.8 (panic sell) hoặc Short + score >= 0.8 (panic buy).
+    """
+    if basket.side == OrderSide.BUY:
+        return ctx.entry_score <= -threshold
+    if basket.side == OrderSide.SELL:
+        return ctx.entry_score >= threshold
+    return False
+
+
 def check_m5_reversal_exit(
     basket: PositionBasket,
     ctx: BasketContext,
@@ -555,13 +573,14 @@ def evaluate_basket(
 
     Thứ tự ưu tiên (P0–P2):
     1. Trend flip exit
-    2. M5 reversal exit
-    3. Max USD loss cap
-    4. ATR stop
-    5. Time stop
-    6. Hard stop
-    7. Joint TP / Single scalp TP
-    8. HOLD
+    2. Panic signal exit (M5 score ngược chiều >= 0.8)
+    3. M5 reversal exit
+    4. Max USD loss cap
+    5. ATR stop
+    6. Time stop
+    7. Hard stop
+    8. Joint TP / Single scalp TP
+    9. HOLD
     """
     _ = signal
     if ctx is None:
@@ -591,6 +610,14 @@ def evaluate_basket(
         return BasketDecision(
             BasketAction.CLOSE_MAX_AGE,
             close_reason="MAX_BASKET_AGE",
+            meta=meta,
+        )
+
+    if check_panic_signal_exit(basket, ctx):
+        meta["entry_score"] = round(ctx.entry_score, 4)
+        return BasketDecision(
+            BasketAction.CLOSE_PANIC_SIGNAL,
+            close_reason="PANIC_SIGNAL",
             meta=meta,
         )
 
