@@ -168,6 +168,7 @@ class TradePosition(Base):
     current_sl: Mapped[float | None] = mapped_column(Float, nullable=True)
     highest_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     lowest_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    basket_peak_pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
     layer_index: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     basket_anchor_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     opened_at: Mapped[datetime] = mapped_column(

@@ -1,4 +1,5 @@
 import type { OrderSide, TradeHistory, TradePosition } from "./types";
+import { parseServerDateTime } from "./utils";
 
 export function positionNotional(volume: number, price: number) {
   return volume * price * 100;
@@ -108,8 +109,8 @@ export interface DailyMetricsRow {
 }
 
 function holdMinutes(row: TradeHistory) {
-  const opened = new Date(row.opened_at).getTime();
-  const closed = new Date(row.closed_at).getTime();
+  const opened = parseServerDateTime(row.opened_at).getTime();
+  const closed = parseServerDateTime(row.closed_at).getTime();
   return Math.max(0, (closed - opened) / 60_000);
 }
 

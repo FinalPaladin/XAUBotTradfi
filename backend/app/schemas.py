@@ -122,6 +122,7 @@ class TradePositionRead(ORMBase):
     current_sl: float | None
     highest_price: float | None
     lowest_price: float | None
+    basket_peak_pnl: float | None = None
     layer_index: int = 0
     basket_anchor_price: float | None = None
     opened_at: datetime

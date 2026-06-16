@@ -71,6 +71,7 @@ class MockPos:
         self.basket_anchor_price = entry
         self.opened_at = opened_at or datetime.now(timezone.utc)
         self.highest_price = None
+        self.basket_peak_pnl = None
 
 
 def test_get_today_realized_pnl(db, guard_config) -> None:
@@ -188,8 +189,33 @@ def test_basket_pnl_trail(guard_config: BotConfig) -> None:
 def test_update_basket_peak_pnl_persists_on_anchor() -> None:
     pos = MockPos("1", OrderSide.BUY, 0.01, 4300.0)
     assert update_basket_peak_pnl(pos, 2.5) == 2.5
-    assert pos.highest_price == 2.5
+    assert pos.basket_peak_pnl == 2.5
+    assert pos.highest_price is None
     assert update_basket_peak_pnl(pos, 1.0) == 2.5
+
+
+def test_basket_pnl_trail_ignores_highest_price_entry_collision(
+    guard_config: BotConfig,
+) -> None:
+    """Regression: highest_price stores entry/market price, not P&L peak."""
+    pos = MockPos("1", OrderSide.BUY, 0.01, 4320.28)
+    pos.highest_price = 4320.28
+    basket = PositionBasket(
+        side=OrderSide.BUY,
+        anchor_price=4320.28,
+        layers=[
+            PositionLayer(
+                ticket_id="1",
+                side=OrderSide.BUY,
+                volume=0.01,
+                entry_price=4320.28,
+                layer_index=0,
+            )
+        ],
+    )
+    peak = update_basket_peak_pnl(pos, -0.52)
+    assert peak == 0.0
+    assert not check_basket_pnl_trail(guard_config, basket, 4315.0, peak_pnl_usd=peak)
 
 
 def test_evaluate_basket_max_age_priority(guard_config: BotConfig) -> None:

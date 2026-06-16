@@ -63,6 +63,7 @@ export interface TradePosition {
   current_sl: number | null;
   highest_price: number | null;
   lowest_price: number | null;
+  basket_peak_pnl: number | null;
   layer_index: number;
   basket_anchor_price: number | null;
   opened_at: string;

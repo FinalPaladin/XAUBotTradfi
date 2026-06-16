@@ -262,15 +262,23 @@ def resolve_basket_trail_floor_usd(config: BotConfig) -> float:
     )
 
 
+def _read_basket_peak_pnl(anchor_position: TradePosition) -> float:
+    """Peak floating P&L — must not reuse highest_price (that stores market price)."""
+    peak = getattr(anchor_position, "basket_peak_pnl", None)
+    if peak is None:
+        return 0.0
+    return float(peak)
+
+
 def update_basket_peak_pnl(anchor_position: TradePosition, net_pnl_usd: float) -> float:
     """
-    Track peak basket floating P&L on anchor layer (highest_price field).
+    Track peak basket floating P&L on anchor layer (basket_peak_pnl field).
 
     Persists across worker restarts so trailing lock survives reloads.
     """
-    peak = float(anchor_position.highest_price or 0.0)
+    peak = _read_basket_peak_pnl(anchor_position)
     if net_pnl_usd > peak:
-        anchor_position.highest_price = round(net_pnl_usd, 2)
+        anchor_position.basket_peak_pnl = round(net_pnl_usd, 2)
         return net_pnl_usd
     return peak
 

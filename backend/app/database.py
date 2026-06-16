@@ -132,6 +132,10 @@ def _migrate_bot_config_columns() -> None:
             alters.append(
                 "ALTER TABLE trade_positions ADD COLUMN basket_anchor_price FLOAT NULL"
             )
+        if "basket_peak_pnl" not in pos_existing:
+            alters.append(
+                "ALTER TABLE trade_positions ADD COLUMN basket_peak_pnl FLOAT NULL"
+            )
 
     if not alters:
         return
@@ -248,12 +252,13 @@ def _migrate_trade_history_dedupe() -> None:
             )
 
 
-def _migrate_history_opened_at_utc() -> None:
-    """Chuẩn hóa opened_at legacy (naive VN) → UTC trong trade_history."""
+def _migrate_fix_history_opened_at_shift() -> None:
+    """Sửa opened_at bị lệch -7h do coerce_utc cũ (coi naive = VN trên MySQL UTC)."""
+    from datetime import timedelta
+
     from sqlalchemy import inspect
 
     from app.models import TradeHistory
-    from app.trading.datetime_utils import coerce_utc
 
     insp = inspect(engine)
     if "trade_history" not in insp.get_table_names():
@@ -263,11 +268,11 @@ def _migrate_history_opened_at_utc() -> None:
         rows = db.query(TradeHistory).all()
         changed = 0
         for row in rows:
-            if row.opened_at.tzinfo is None:
-                row.opened_at = coerce_utc(row.opened_at)
-                changed += 1
-            elif row.closed_at.tzinfo is None:
-                row.closed_at = coerce_utc(row.closed_at)
+            if row.opened_at is None or row.closed_at is None:
+                continue
+            diff_h = (row.closed_at - row.opened_at).total_seconds() / 3600
+            if 6.0 <= diff_h <= 9.0:
+                row.opened_at = row.opened_at + timedelta(hours=7)
                 changed += 1
         if changed:
             db.commit()
@@ -282,7 +287,7 @@ def init_db() -> None:
     _migrate_bot_config_columns()
     _migrate_risk_tuning()
     _migrate_trade_history_dedupe()
-    _migrate_history_opened_at_utc()
+    _migrate_fix_history_opened_at_shift()
     with SessionLocal() as db:
         if seed_if_empty(db):
             db.commit()

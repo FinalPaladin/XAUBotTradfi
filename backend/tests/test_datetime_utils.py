@@ -5,12 +5,12 @@ from datetime import datetime, timezone
 from app.trading.datetime_utils import coerce_utc, utc_now
 
 
-def test_coerce_utc_naive_vn_to_utc() -> None:
-    naive = datetime(2026, 6, 11, 16, 26, 31)
+def test_coerce_utc_naive_mysql_utc() -> None:
+    naive = datetime(2026, 6, 11, 8, 10, 41)
     result = coerce_utc(naive)
     assert result.tzinfo == timezone.utc
-    assert result.hour == 9
-    assert result.minute == 26
+    assert result.hour == 8
+    assert result.minute == 10
 
 
 def test_coerce_utc_aware_passthrough() -> None:
