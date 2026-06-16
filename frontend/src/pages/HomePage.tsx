@@ -19,17 +19,56 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { api } from "@/lib/api";
-import { buildDailyPnlSeries, todayPnl } from "@/lib/trading";
-import { formatMoney } from "@/lib/utils";
-
-type DaysFilter = 7 | 30 | 90;
+import {
+  buildDailyMetricsRows,
+  buildDailyPnlSeries,
+  dashboardPeriodLabel,
+  startOfTodayLocalIso,
+  todayPnl,
+  type DailyMetricsRow,
+  type DashboardDaysFilter,
+} from "@/lib/trading";
+import type { HistoryQuery, TradeHistory } from "@/lib/types";
+import { formatMoney, formatNumber } from "@/lib/utils";
 
 const selectClass =
   "flex h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
+function buildDashboardHistoryQuery(days: DashboardDaysFilter): HistoryQuery {
+  if (days === 0) {
+    return { since: startOfTodayLocalIso(), page: 1, page_size: 100 };
+  }
+  return { days, page: 1, page_size: 100 };
+}
+
+async function fetchAllHistory(params: HistoryQuery): Promise<TradeHistory[]> {
+  const pageSize = params.page_size ?? 100;
+  const first = await api.getHistory({ ...params, page: 1, page_size: pageSize });
+  const all = [...first.items];
+  for (let p = 2; p <= first.total_pages; p++) {
+    const page = await api.getHistory({ ...params, page: p, page_size: pageSize });
+    all.push(...page.items);
+  }
+  return all;
+}
+
+function pnlClass(value: number) {
+  if (value > 0) return "text-emerald-600 font-medium";
+  if (value < 0) return "text-red-600 font-medium";
+  return "";
+}
+
 export function HomePage() {
-  const [days, setDays] = useState<DaysFilter>(7);
+  const [days, setDays] = useState<DashboardDaysFilter>(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -40,6 +79,7 @@ export function HomePage() {
   const [chartData, setChartData] = useState<
     { date: string; pnl: number; cumulative: number }[]
   >([]);
+  const [metricsRows, setMetricsRows] = useState<DailyMetricsRow[]>([]);
   const firstLoad = useRef(true);
 
   const loadDashboard = useCallback(async () => {
@@ -47,18 +87,17 @@ export function HomePage() {
     const status = await api.getStatus();
     setOpenCount(status.open_positions.length);
 
-    const historyPage = await api.getHistory({
-      days,
-      page: 1,
-      page_size: 100,
-    });
-    const history = historyPage.items;
+    const baseEquity =
+      status.bots.find((b) => b.base_equity_usd > 0)?.base_equity_usd ?? 0;
+
+    const history = await fetchAllHistory(buildDashboardHistoryQuery(days));
     const wins = history.filter((h) => h.profit_loss > 0).length;
     const losses = history.filter((h) => h.profit_loss < 0).length;
     setWinCount(wins);
     setLossCount(losses);
     setTodayProfit(todayPnl(history));
     setChartData(buildDailyPnlSeries(history, days));
+    setMetricsRows(buildDailyMetricsRows(history, days, baseEquity));
   }, [days]);
 
   useEffect(() => {
@@ -100,6 +139,9 @@ export function HomePage() {
   }
 
   const busy = loading || refreshing;
+  const period = dashboardPeriodLabel(days);
+  const chartPeriod =
+    days === 0 ? "hôm nay" : `${days} ngày`;
 
   return (
     <div className="space-y-6">
@@ -112,7 +154,7 @@ export function HomePage() {
         <div>
           <h2 className="text-2xl font-semibold">Dashboard</h2>
           <p className="text-sm text-muted-foreground">
-            Tổng quan lệnh và lợi nhuận {days} ngày gần nhất
+            Tổng quan lệnh và lợi nhuận {period}
             {refreshing ? " · Đang cập nhật…" : ""}
           </p>
         </div>
@@ -123,8 +165,11 @@ export function HomePage() {
             className={selectClass}
             value={days}
             disabled={busy}
-            onChange={(e) => setDays(Number(e.target.value) as DaysFilter)}
+            onChange={(e) =>
+              setDays(Number(e.target.value) as DashboardDaysFilter)
+            }
           >
+            <option value={0}>Hôm nay</option>
             <option value={7}>7 ngày</option>
             <option value={30}>30 ngày</option>
             <option value={90}>90 ngày</option>
@@ -154,7 +199,7 @@ export function HomePage() {
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle>P&amp;L theo ngày ({days} ngày)</CardTitle>
+            <CardTitle>P&amp;L theo ngày ({chartPeriod})</CardTitle>
             <CardDescription>Lợi nhuận đóng lệnh mỗi ngày</CardDescription>
           </CardHeader>
           <CardContent className="h-72">
@@ -176,7 +221,7 @@ export function HomePage() {
         <Card>
           <CardHeader>
             <CardTitle>Lợi nhuận tích lũy</CardTitle>
-            <CardDescription>Cumulative P&amp;L {days} ngày</CardDescription>
+            <CardDescription>Cumulative P&amp;L {chartPeriod}</CardDescription>
           </CardHeader>
           <CardContent className="h-72">
             <ResponsiveContainer width="100%" height="100%">
@@ -200,6 +245,86 @@ export function HomePage() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Chỉ số theo ngày</CardTitle>
+          <CardDescription>
+            Hiệu suất giao dịch theo từng mốc ngày ({period})
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Ngày</TableHead>
+                <TableHead className="text-right">Tổng GD</TableHead>
+                <TableHead className="text-right">Thắng</TableHead>
+                <TableHead className="text-right">Thua</TableHead>
+                <TableHead className="text-right">Tỷ lệ lãi</TableHead>
+                <TableHead className="text-right">PnL</TableHead>
+                <TableHead className="text-right">PnL TB/GD</TableHead>
+                <TableHead className="text-right">TB giữ (phút)</TableHead>
+                <TableHead className="text-right">Tỷ lệ L/L</TableHead>
+                <TableHead className="text-right">ROE</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {metricsRows.length === 0 ? (
+                <TableRow>
+                  <TableCell
+                    colSpan={10}
+                    className="text-center text-muted-foreground"
+                  >
+                    Chưa có dữ liệu trong khoảng thời gian này.
+                  </TableCell>
+                </TableRow>
+              ) : (
+                metricsRows.map((row) => (
+                  <TableRow key={row.date}>
+                    <TableCell className="font-medium">{row.date}</TableCell>
+                    <TableCell className="text-right">{row.totalTrades}</TableCell>
+                    <TableCell className="text-right text-emerald-600">
+                      {row.wins}
+                    </TableCell>
+                    <TableCell className="text-right text-muted-foreground">
+                      {row.losses}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {row.totalTrades > 0
+                        ? `${formatNumber(row.winRate)}%`
+                        : "—"}
+                    </TableCell>
+                    <TableCell className={`text-right ${pnlClass(row.pnl)}`}>
+                      {row.totalTrades > 0 ? formatMoney(row.pnl) : "—"}
+                    </TableCell>
+                    <TableCell className={`text-right ${pnlClass(row.avgPnl)}`}>
+                      {row.totalTrades > 0 ? formatMoney(row.avgPnl) : "—"}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {row.totalTrades > 0
+                        ? formatNumber(row.avgHoldMinutes)
+                        : "—"}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {row.profitLossRatio != null
+                        ? `${formatNumber(row.profitLossRatio)} : 1`
+                        : "—"}
+                    </TableCell>
+                    <TableCell
+                      className={`text-right ${row.roe != null ? pnlClass(row.roe) : ""}`}
+                    >
+                      {row.roe != null
+                        ? `${row.roe >= 0 ? "+" : ""}${formatNumber(row.roe)}%`
+                        : "—"}
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
     </div>
   );
 }

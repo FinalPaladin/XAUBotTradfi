@@ -19,7 +19,9 @@ from app.trading.basket_manager import (
     should_add_dca_layer,
     should_open_initial_layer,
     should_open_reversal_hedge_layer,
+    update_basket_peak_pnl,
 )
+from app.trading.daily_guard import evaluate_daily_guard
 from app.trading.drawdown_guard import (
     evaluate_drawdown,
     panic_close_all,
@@ -196,6 +198,33 @@ class TradingOrchestrator:
                         )
                     }
 
+            daily_guard = evaluate_daily_guard(
+                self.db, bot.id, open_positions, price
+            )
+            if daily_guard.stop_bot:
+                bot.status = BotStatus.STOPPED
+                log_message(
+                    self.db,
+                    f"DAILY LOSS CAP: {daily_guard.reason} — bot STOPPED",
+                    bot_id=bot.id,
+                    level=LogLevel.WARNING,
+                    source="daily_guard",
+                )
+                self.db.commit()
+                return {
+                    "summary": make_summary(
+                        action=f"DAILY LOSS CAP — {daily_guard.reason}, bot STOPPED"
+                    )
+                }
+
+            block_new_entries = daily_guard.block_new_entries
+            if block_new_entries and daily_guard.reason:
+                logger.info(
+                    "bot_id=%s daily guard: %s (manage only)",
+                    bot.id,
+                    daily_guard.reason,
+                )
+
             atr_meta = trend_signal.meta.get("atr") or {}
             atr_value = atr_meta.get("current_atr")
             if atr_value is not None:
@@ -224,6 +253,17 @@ class TradingOrchestrator:
                             if pos.current_tp is not None:
                                 self._executor.strip_broker_tp(pos)
 
+                net_pnl = calculate_net_pnl_usd(basket, price)
+                anchor_pos = next(
+                    (
+                        p
+                        for p in side_positions
+                        if (getattr(p, "layer_index", 0) or 0) == 0
+                    ),
+                    side_positions[0],
+                )
+                basket_peak_pnl = update_basket_peak_pnl(anchor_pos, net_pnl)
+
                 decision = evaluate_basket(
                     bot,
                     basket,
@@ -231,6 +271,7 @@ class TradingOrchestrator:
                     signal,
                     account_balance,
                     ctx=basket_ctx,
+                    basket_peak_pnl=basket_peak_pnl,
                 )
 
                 if decision.action != BasketAction.HOLD:
@@ -295,7 +336,8 @@ class TradingOrchestrator:
                 side_max_layers = effective_max_layers(bot, basket, basket_ctx)
 
                 if (
-                    should_add_dca_layer(
+                    not block_new_entries
+                    and should_add_dca_layer(
                         bot,
                         basket,
                         price,
@@ -333,7 +375,7 @@ class TradingOrchestrator:
                     return {"summary": make_summary(action=action_msg)}
 
             action_msg = None
-            if should_open_reversal_hedge_layer(
+            if not block_new_entries and should_open_reversal_hedge_layer(
                 signal,
                 open_positions,
                 is_scalp_mode=trend_signal.is_scalp_mode,
@@ -368,7 +410,7 @@ class TradingOrchestrator:
                     self.db.commit()
                     return {"summary": make_summary(action=action_msg)}
 
-            if should_open_initial_layer(signal, open_positions):
+            if not block_new_entries and should_open_initial_layer(signal, open_positions):
                 fresh_positions = (
                     self.db.query(TradePosition)
                     .filter(TradePosition.bot_id == bot.id)

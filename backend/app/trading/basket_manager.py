@@ -21,6 +21,11 @@ TREND_FLIP_ADVERSE_MIN = 3.0
 M5_REVERSAL_EXIT_SCORE = 0.5
 BASKET_TIME_STOP_ADVERSE_MIN = 8.0
 
+# P0/P1 guardrails
+MAX_BASKET_AGE_MINUTES = 300
+BASKET_TRAIL_ACTIVATE_USD = 3.0
+BASKET_TRAIL_FLOOR_USD = 1.0
+
 
 @dataclass
 class BasketContext:
@@ -233,6 +238,54 @@ def calculate_layer_pnl_usd(layer: PositionLayer, current_price: float) -> float
     if layer.side == OrderSide.BUY:
         return round((current_price - layer.entry_price) * layer.volume * 100, 2)
     return round((layer.entry_price - current_price) * layer.volume * 100, 2)
+
+
+def resolve_max_basket_age_minutes(config: BotConfig) -> float:
+    """Max basket hold time before forced close (default 5 hours)."""
+    return float(getattr(config, "max_basket_age_minutes", None) or MAX_BASKET_AGE_MINUTES)
+
+
+def check_max_basket_age(config: BotConfig, basket: PositionBasket) -> bool:
+    """P0: close basket when held too long, regardless of P&L."""
+    return basket_age_minutes(basket) >= resolve_max_basket_age_minutes(config)
+
+
+def resolve_basket_trail_activate_usd(config: BotConfig) -> float:
+    return float(
+        getattr(config, "basket_trail_activate_usd", None) or BASKET_TRAIL_ACTIVATE_USD
+    )
+
+
+def resolve_basket_trail_floor_usd(config: BotConfig) -> float:
+    return float(
+        getattr(config, "basket_trail_floor_usd", None) or BASKET_TRAIL_FLOOR_USD
+    )
+
+
+def update_basket_peak_pnl(anchor_position: TradePosition, net_pnl_usd: float) -> float:
+    """
+    Track peak basket floating P&L on anchor layer (highest_price field).
+
+    Persists across worker restarts so trailing lock survives reloads.
+    """
+    peak = float(anchor_position.highest_price or 0.0)
+    if net_pnl_usd > peak:
+        anchor_position.highest_price = round(net_pnl_usd, 2)
+        return net_pnl_usd
+    return peak
+
+
+def check_basket_pnl_trail(
+    config: BotConfig,
+    basket: PositionBasket,
+    current_price: float,
+    peak_pnl_usd: float,
+) -> bool:
+    """P1: lock basket profit — close when P&L retraces to floor after reaching activate."""
+    if peak_pnl_usd < resolve_basket_trail_activate_usd(config):
+        return False
+    net_pnl = calculate_net_pnl_usd(basket, current_price)
+    return net_pnl <= resolve_basket_trail_floor_usd(config)
 
 
 def resolve_max_basket_loss_limit(
@@ -487,6 +540,7 @@ def evaluate_basket(
     account_balance: float | None = None,
     *,
     ctx: BasketContext | None = None,
+    basket_peak_pnl: float | None = None,
 ) -> BasketDecision:
     """
     Đánh giá basket tổng hợp — thay thế evaluate_position per-ticket khi DCA.
@@ -525,6 +579,13 @@ def evaluate_basket(
             meta=meta,
         )
 
+    if check_max_basket_age(config, basket):
+        return BasketDecision(
+            BasketAction.CLOSE_MAX_AGE,
+            close_reason="MAX_BASKET_AGE",
+            meta=meta,
+        )
+
     if check_m5_reversal_exit(basket, ctx, net_pnl):
         return BasketDecision(
             BasketAction.CLOSE_M5_REVERSAL,
@@ -542,6 +603,16 @@ def evaluate_basket(
         return BasketDecision(
             reason,
             close_reason="MAX_BASKET_LOSS",
+            meta=meta,
+        )
+
+    if basket_peak_pnl is not None and check_basket_pnl_trail(
+        config, basket, current_price, basket_peak_pnl
+    ):
+        meta["basket_peak_pnl"] = round(basket_peak_pnl, 2)
+        return BasketDecision(
+            BasketAction.CLOSE_BASKET_TRAIL,
+            close_reason="BASKET_PNL_TRAIL",
             meta=meta,
         )
 

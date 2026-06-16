@@ -167,15 +167,38 @@ def _migrate_risk_tuning() -> None:
         if "counter_trend_max_layers" in existing:
             conn.execute(
                 text(
-                    "UPDATE bot_config SET counter_trend_max_layers = 5 "
-                    "WHERE counter_trend_max_layers IS NULL OR counter_trend_max_layers <= 1"
+                    "UPDATE bot_config SET counter_trend_max_layers = 1 "
+                    "WHERE counter_trend_max_layers IS NULL OR counter_trend_max_layers >= 5"
                 )
             )
         if "max_basket_loss_pct" in existing:
             conn.execute(
                 text(
-                    "UPDATE bot_config SET max_basket_loss_pct = 20.0 "
-                    "WHERE max_basket_loss_pct IS NULL OR max_basket_loss_pct <= 0"
+                    "UPDATE bot_config SET max_basket_loss_pct = 4.0 "
+                    "WHERE max_basket_loss_pct IS NULL OR max_basket_loss_pct >= 20.0"
+                )
+            )
+        if "max_layers" in existing:
+            conn.execute(
+                text(
+                    "UPDATE bot_config SET max_layers = 2, max_open_positions = 2 "
+                    "WHERE max_layers >= 5 OR max_open_positions >= 5"
+                )
+            )
+        if "hard_stop_adverse_distance" in existing:
+            conn.execute(
+                text(
+                    "UPDATE bot_config SET hard_stop_adverse_distance = 9.0 "
+                    "WHERE hard_stop_adverse_distance IS NULL "
+                    "OR hard_stop_adverse_distance >= 12.0"
+                )
+            )
+        if "single_tp_min_usd" in existing:
+            conn.execute(
+                text(
+                    "UPDATE bot_config SET single_tp_min_usd = 2.0, "
+                    "single_tp_distance = 2.0 "
+                    "WHERE single_tp_min_usd <= 1.0 OR single_tp_distance <= 1.2"
                 )
             )
         if "layer_spacing_min" in existing:

@@ -12,14 +12,15 @@ export function formatLogNumber(value: number, digits = 2) {
   }).format(value);
 }
 
-/** Parse API datetime — UTC (+00:00/Z) → local; naive → local wall-clock. */
+/** Parse API datetime — mọi timestamp backend lưu theo UTC (kể cả naive ISO). */
 export function parseServerDateTime(iso: string) {
   const trimmed = iso.trim();
   const hasTz = /[Zz]$|[+-]\d{2}:\d{2}$/.test(trimmed);
   if (hasTz) {
     return new Date(trimmed);
   }
-  return new Date(trimmed);
+  // Naive ISO từ API = UTC wall-clock (MySQL/MT5), không phải giờ local.
+  return new Date(`${trimmed}Z`);
 }
 
 export function formatLogDateTime(iso: string) {
