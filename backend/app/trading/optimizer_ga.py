@@ -17,17 +17,26 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from multiprocessing import Pool, cpu_count
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from app.models import BotConfig, BotStatus, OrderSide
 from app.seed import _default_xauusd_bot
-from app.trading.aggregator import aggregate_signal, atr_volatility_factor
+from app.trading.aggregator import (
+    ATR_AVG_LOOKBACK,
+    ATR_DAMPEN_FACTOR,
+    ATR_PERIOD,
+    aggregate_signal,
+    atr_volatility_factor,
+    normalize_score,
+)
 from app.trading.basket_manager import (
     BasketContext,
     PositionBasket,
@@ -45,7 +54,13 @@ from app.trading.drawdown_guard import (
     DD_PARTIAL_THRESHOLD_PCT,
     current_drawdown_percent,
 )
+from app.trading.indicators.atr import average_true_range
+from app.trading.indicators.donchian import donchian_channel
+from app.trading.indicators.ema import ema
+from app.trading.indicators.rsi_divergence import rsi
+from app.trading.indicators.supertrend import supertrend
 from app.trading.risk import SCALP_VOLUME_MULTIPLIER, calculate_fixed_lot_size
+from app.trading.strategies.donchian_strategy import _pullback_score
 from app.trading.signal_engine import (
     MainTrend,
     _filter_entry_signal,
@@ -97,6 +112,8 @@ _MP_DF_H1: pd.DataFrame | None = None
 _MP_DF_M5: pd.DataFrame | None = None
 _MP_BASE_SNAPSHOT: dict[str, Any] | None = None
 _MP_INITIAL_BALANCE: float = 200.0
+_MP_MAX_M5_BARS: int | None = None
+_MP_PRECOMPUTED: PrecomputedSignals | None = None
 
 # Giới hạn gene theo yêu cầu
 SINGLE_TP_MIN = 0.5
@@ -230,14 +247,33 @@ def load_ohlcv_csv(path: str | Path) -> pd.DataFrame:
     return df[["time", "open", "high", "low", "close", "tick_volume", "spread", "real_volume"]]
 
 
+def trim_backtest_data(
+    df_h1: pd.DataFrame,
+    df_m5: pd.DataFrame,
+    max_m5_bars: int | None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Giới hạn số nến M5 (lấy đuôi gần nhất), cắt H1 tương ứng cho lookback."""
+    if max_m5_bars is None or len(df_m5) <= max_m5_bars:
+        return df_h1, df_m5
+
+    df_m5 = df_m5.tail(max_m5_bars).reset_index(drop=True)
+    m5_start = df_m5["time"].iloc[0]
+    m5_end = df_m5["time"].iloc[-1]
+    h1_start = m5_start - pd.Timedelta(hours=500)
+    df_h1 = df_h1[(df_h1["time"] >= h1_start) & (df_h1["time"] <= m5_end)].reset_index(drop=True)
+    return df_h1, df_m5
+
+
 def load_backtest_environment(
     h1_path: str = DEFAULT_H1_CSV,
     m5_path: str = DEFAULT_M5_CSV,
+    *,
+    max_m5_bars: int | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Load cặp dữ liệu H1 (xu hướng) + M5 (entry) cho backtest."""
     df_h1 = load_ohlcv_csv(h1_path)
     df_m5 = load_ohlcv_csv(m5_path)
-    return df_h1, df_m5
+    return trim_backtest_data(df_h1, df_m5, max_m5_bars)
 
 
 def resolve_backtest_csv_paths(h1_path: str, m5_path: str) -> tuple[str, str]:
@@ -300,6 +336,27 @@ class BacktestState:
     def next_ticket(self) -> str:
         self._ticket_seq += 1
         return f"SIM-{self._ticket_seq}"
+
+
+@dataclass
+class PrecomputedSignals:
+    """
+    Raw strategy scores + ATR theo từng nến M5 (tính 1 lần / worker).
+
+    GA chỉ đổi trọng số và tham số DCA — period indicator cố định từ base config,
+    nên precompute tái sử dụng cho mọi cá thể trong pool.
+    """
+
+    min_bar: int
+    valid: np.ndarray
+    h1_donchian: np.ndarray
+    h1_supertrend: np.ndarray
+    m5_donchian: np.ndarray
+    m5_supertrend: np.ndarray
+    m5_rsi: np.ndarray
+    m5_ema: np.ndarray
+    m5_atr_factor: np.ndarray
+    m5_atr_value: np.ndarray
 
 
 def _position_floating_pnl(position: SimPosition, price: float) -> float:
@@ -426,11 +483,150 @@ def compute_backtest_signal(
     return signal, ctx
 
 
-def _slice_bars(df: pd.DataFrame, end_time: pd.Timestamp, lookback: int) -> pd.DataFrame:
-    subset = df[df["time"] <= end_time]
-    if subset.empty:
-        return subset
-    return subset.tail(lookback).reset_index(drop=True)
+def _precompute_h1_end_indices(df_h1: pd.DataFrame, df_m5: pd.DataFrame) -> np.ndarray:
+    """Với mỗi nến M5, index H1 cuối cùng có time <= time M5 (searchsorted O(log n))."""
+    h1_times = df_h1["time"].to_numpy()
+    m5_times = df_m5["time"].to_numpy()
+    return np.searchsorted(h1_times, m5_times, side="right") - 1
+
+
+def _slice_h1_by_index(df_h1: pd.DataFrame, end_idx: int, lookback: int) -> pd.DataFrame:
+    if end_idx < 0:
+        return df_h1.iloc[0:0]
+    start_idx = max(0, end_idx - lookback + 1)
+    return df_h1.iloc[start_idx : end_idx + 1].reset_index(drop=True)
+
+
+def _net_from_weighted(weighted: float, threshold: float) -> int:
+    if weighted >= threshold:
+        return int(NetSignal.BUY)
+    if weighted <= -threshold:
+        return int(NetSignal.SELL)
+    return int(NetSignal.HOLD)
+
+
+def precompute_backtest_signals(
+    df_h1: pd.DataFrame,
+    df_m5: pd.DataFrame,
+    config: BotConfig,
+    *,
+    lookback: int | None = None,
+) -> PrecomputedSignals:
+    """
+    Tính trước raw score chiến lược cho mọi nến M5 (1 lần / worker process).
+
+    Chi phí O(n × lookback) nhưng chỉ trả 1 lần; mỗi cá thể GA chỉ ghép trọng số + mô phỏng lệnh.
+    """
+    lookback = lookback or config.bars_lookback
+    min_bar = max(lookback, 50)
+    n = len(df_m5)
+    valid = np.zeros(n, dtype=np.bool_)
+    h1_d = np.zeros(n, dtype=np.float64)
+    h1_st = np.zeros(n, dtype=np.float64)
+    m5_d = np.zeros(n, dtype=np.float64)
+    m5_st = np.zeros(n, dtype=np.float64)
+    m5_rsi = np.zeros(n, dtype=np.float64)
+    m5_ema = np.zeros(n, dtype=np.float64)
+    m5_atr_factor = np.ones(n, dtype=np.float64)
+    m5_atr_value = np.full(n, np.nan, dtype=np.float64)
+
+    h1_end_indices = _precompute_h1_end_indices(df_h1, df_m5)
+    total = max(n - min_bar, 1)
+    report_every = max(2000, total // 10)
+
+    for offset, i in enumerate(range(min_bar, n)):
+        if offset > 0 and offset % report_every == 0:
+            print(f"  precompute: {offset}/{total} nến M5...", flush=True)
+        h1_end = int(h1_end_indices[i])
+        if h1_end < 29:
+            continue
+
+        h1_slice = df_h1.iloc[max(0, h1_end - lookback + 1) : h1_end + 1]
+        m5_slice = df_m5.iloc[max(0, i - lookback + 1) : i + 1]
+        if len(h1_slice) < 30 or len(m5_slice) < 30:
+            continue
+
+        valid[i] = True
+        h1_d[i] = donchian_strategy.evaluate(h1_slice, config).score
+        h1_st[i] = supertrend_strategy.evaluate(h1_slice, config).score
+
+        m5_results = compute_strategy_scores(m5_slice, config)
+        m5_d[i] = m5_results[0].score
+        m5_st[i] = m5_results[1].score
+        m5_rsi[i] = m5_results[2].score
+        m5_ema[i] = m5_results[3].score
+
+        atr_factor, atr_meta = atr_volatility_factor(m5_slice)
+        m5_atr_factor[i] = atr_factor
+        current_atr = atr_meta.get("current_atr")
+        if current_atr is not None:
+            m5_atr_value[i] = float(current_atr)
+
+    return PrecomputedSignals(
+        min_bar=min_bar,
+        valid=valid,
+        h1_donchian=h1_d,
+        h1_supertrend=h1_st,
+        m5_donchian=m5_d,
+        m5_supertrend=m5_st,
+        m5_rsi=m5_rsi,
+        m5_ema=m5_ema,
+        m5_atr_factor=m5_atr_factor,
+        m5_atr_value=m5_atr_value,
+    )
+
+
+def _build_signal_from_precomputed(
+    pc: PrecomputedSignals,
+    bar_index: int,
+    config: BotConfig,
+) -> tuple[AggregatedSignal, BasketContext]:
+    """Ghép trọng số từ config (gene GA) lên raw score đã precompute."""
+    trend_weight = config.donchian_weight + config.supertrend_weight
+    if trend_weight <= 0:
+        h1_weighted = 0.0
+    else:
+        h1_weighted = normalize_score(
+            (config.donchian_weight / trend_weight) * pc.h1_donchian[bar_index]
+            + (config.supertrend_weight / trend_weight) * pc.h1_supertrend[bar_index]
+        )
+    h1_threshold = normalize_score(config.signal_threshold * trend_weight)
+    h1_net = _net_from_weighted(h1_weighted, h1_threshold)
+    main_trend, _, _ = _resolve_main_trend(h1_net)
+
+    atr_factor = float(pc.m5_atr_factor[bar_index])
+    raw_entry = (
+        config.donchian_weight * pc.m5_donchian[bar_index]
+        + config.supertrend_weight * pc.m5_supertrend[bar_index]
+        + config.rsi_weight * pc.m5_rsi[bar_index]
+        + config.ema_weight * pc.m5_ema[bar_index]
+    )
+    entry_weighted = normalize_score(raw_entry * atr_factor)
+    entry_threshold = normalize_score(config.signal_threshold * atr_factor)
+    entry_net = _net_from_weighted(entry_weighted, entry_threshold)
+
+    final_net, is_scalp_mode, _ = _filter_entry_signal(
+        entry_net,
+        entry_weighted,
+        main_trend,
+        entry_threshold=config.signal_threshold,
+    )
+
+    signal = AggregatedSignal(
+        strategy_results=[],
+        weighted_score=entry_weighted,
+        net_signal=final_net,
+        is_scalp_mode=is_scalp_mode,
+    )
+    atr_val = pc.m5_atr_value[bar_index]
+    ctx = BasketContext(
+        main_trend=main_trend,
+        entry_net_raw=entry_net,
+        entry_score=entry_weighted,
+        is_scalp_mode=is_scalp_mode,
+        atr_value=None if np.isnan(atr_val) else float(atr_val),
+    )
+    return signal, ctx
 
 
 def _apply_drawdown_guard(state: BacktestState, price: float) -> bool:
@@ -515,36 +711,45 @@ def run_backtest(
     *,
     initial_balance: float = 200.0,
     lookback: int | None = None,
+    precomputed: PrecomputedSignals | None = None,
 ) -> BacktestResult:
     """
     Duyệt từng nến M5, mô phỏng vào lệnh / DCA / thoát / drawdown guard.
 
-    Fitness đánh giá dựa trên PnL, Profit Factor và Max Drawdown thu được.
+    Khi `precomputed` có sẵn (worker GA), bỏ qua tính indicator lặp lại mỗi cá thể.
     """
     lookback = lookback or config.bars_lookback
     min_bars = max(lookback, 50)
     if len(df_m5) < min_bars:
         return BacktestResult()
 
+    pc = precomputed if precomputed is not None else _MP_PRECOMPUTED
+    closes = df_m5["close"].to_numpy()
+    times = df_m5["time"]
+    start_i = pc.min_bar if pc is not None else min_bars
+
     state = BacktestState(balance=initial_balance, equity_peak=initial_balance)
+    h1_end_indices = None if pc is not None else _precompute_h1_end_indices(df_h1, df_m5)
 
-    for i in range(min_bars, len(df_m5)):
-        row = df_m5.iloc[i]
-        bar_time = row["time"].to_pydatetime()
-        price = float(row["close"])
+    for i in range(start_i, len(df_m5)):
+        price = float(closes[i])
 
-        df_h1_slice = _slice_bars(df_h1, row["time"], lookback)
-        df_m5_slice = df_m5.iloc[max(0, i - lookback + 1) : i + 1].reset_index(drop=True)
-
-        if len(df_h1_slice) < 30 or len(df_m5_slice) < 30:
-            continue
-
-        signal, ctx = compute_backtest_signal(df_h1_slice, df_m5_slice, config)
-        open_count_at_bar = len(state.positions)
+        if pc is not None:
+            if not pc.valid[i]:
+                continue
+            signal, ctx = _build_signal_from_precomputed(pc, i, config)
+        else:
+            df_h1_slice = _slice_h1_by_index(df_h1, int(h1_end_indices[i]), lookback)
+            df_m5_slice = df_m5.iloc[max(0, i - lookback + 1) : i + 1].reset_index(drop=True)
+            if len(df_h1_slice) < 30 or len(df_m5_slice) < 30:
+                continue
+            signal, ctx = compute_backtest_signal(df_h1_slice, df_m5_slice, config)
 
         if _apply_drawdown_guard(state, price):
             _update_equity_metrics(state, price)
             continue
+
+        bar_time = times.iloc[i].to_pydatetime()
 
         for side in (OrderSide.BUY, OrderSide.SELL):
             _process_basket_side(state, config, side, price, signal, ctx, bar_time)
@@ -731,17 +936,20 @@ def _init_eval_worker(
     m5_path: str,
     base_snapshot: dict[str, Any],
     initial_balance: float,
+    max_m5_bars: int | None,
+    precomputed: PrecomputedSignals,
 ) -> None:
     """
-    Khởi tạo worker process: tự load CSV từ đường dẫn (không pickle DataFrame).
+    Khởi tạo worker process: load CSV + nhận PrecomputedSignals từ main (tính 1 lần).
 
-    Trên Windows (spawn), truyền DataFrame qua initargs gây treo/deadlock với dataset lớn.
-    Mỗi worker đọc file một lần khi khởi động và giữ trong global _MP_DF_*.
+    Trên Windows (spawn), không pickle DataFrame — worker tự đọc CSV; tín hiệu truyền sẵn.
     """
-    global _MP_DF_H1, _MP_DF_M5, _MP_BASE_SNAPSHOT, _MP_INITIAL_BALANCE
-    _MP_DF_H1, _MP_DF_M5 = load_backtest_environment(h1_path, m5_path)
+    global _MP_DF_H1, _MP_DF_M5, _MP_BASE_SNAPSHOT, _MP_INITIAL_BALANCE, _MP_MAX_M5_BARS, _MP_PRECOMPUTED
+    _MP_MAX_M5_BARS = max_m5_bars
+    _MP_DF_H1, _MP_DF_M5 = load_backtest_environment(h1_path, m5_path, max_m5_bars=max_m5_bars)
     _MP_BASE_SNAPSHOT = base_snapshot
     _MP_INITIAL_BALANCE = initial_balance
+    _MP_PRECOMPUTED = precomputed
 
 
 def _evaluate_genes_worker(genes: list[float]) -> tuple[list[float], float, dict[str, Any]]:
@@ -784,7 +992,9 @@ def evaluate_population_parallel(
     *,
     initial_balance: float,
     workers: int,
+    max_m5_bars: int | None = None,
     pool: Pool | None = None,
+    precomputed: PrecomputedSignals | None = None,
 ) -> None:
     """
     Chia quần thể cho Pool xử lý song song.
@@ -798,7 +1008,7 @@ def evaluate_population_parallel(
     base_snapshot = base_config_to_snapshot(base_config)
     gene_lists = [ind.genes for ind in population]
     h1_resolved, m5_resolved = resolve_backtest_csv_paths(h1_path, m5_path)
-    initargs = (h1_resolved, m5_resolved, base_snapshot, initial_balance)
+    initargs = (h1_resolved, m5_resolved, base_snapshot, initial_balance, max_m5_bars, precomputed)
     chunksize = max(1, len(gene_lists) // workers)
 
     if workers == 1:
@@ -891,6 +1101,8 @@ def run_genetic_algorithm(
     initial_balance: float = 200.0,
     base_config: BotConfig | None = None,
     workers: int | None = None,
+    max_m5_bars: int | None = None,
+    precomputed: PrecomputedSignals | None = None,
 ) -> Individual:
     """
     Vòng lặp tiến hóa GA thuần Python với fitness evaluation song song (multiprocessing).
@@ -923,6 +1135,8 @@ def run_genetic_algorithm(
         m5_resolved,
         base_config_to_snapshot(base_config),
         initial_balance,
+        max_m5_bars,
+        precomputed,
     )
 
     def _run_generation_loop(mp_pool: Pool | None) -> None:
@@ -938,7 +1152,9 @@ def run_genetic_algorithm(
                 base_config,
                 initial_balance=initial_balance,
                 workers=n_workers,
+                max_m5_bars=max_m5_bars,
                 pool=mp_pool,
+                precomputed=precomputed,
             )
 
             population.sort(key=lambda x: x.fitness, reverse=True)
@@ -1052,6 +1268,10 @@ def print_best_summary(best: Individual) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser(
         description="GA Optimizer — tìm trọng số chiến lược và tham số DCA tối ưu"
     )
@@ -1073,6 +1293,12 @@ def main(argv: list[str] | None = None) -> None:
         default=DEFAULT_OUTPUT_JSON,
         help="File JSON đầu ra",
     )
+    parser.add_argument(
+        "--max-m5-bars",
+        type=int,
+        default=None,
+        help="Giới hạn số nến M5 dùng backtest (mặc định: toàn bộ CSV)",
+    )
     args = parser.parse_args(argv)
 
     h1_csv = args.h1_csv or DEFAULT_H1_CSV
@@ -1081,13 +1307,20 @@ def main(argv: list[str] | None = None) -> None:
     print("Đang load dữ liệu backtest...")
     print(f"  H1 CSV: {h1_csv}")
     print(f"  M5 CSV: {m5_csv}")
-    df_h1, df_m5 = load_backtest_environment(h1_csv, m5_csv)
+    df_h1, df_m5 = load_backtest_environment(h1_csv, m5_csv, max_m5_bars=args.max_m5_bars)
     print(f"  H1: {len(df_h1)} nến | M5: {len(df_m5)} nến")
+    if args.max_m5_bars:
+        print(f"  (giới hạn --max-m5-bars={args.max_m5_bars})")
 
     workers = max(1, min(args.workers, args.population))
 
+    base_config = _default_xauusd_bot()
+    print("\nPrecompute tín hiệu chiến lược (1 lần trước GA)...")
+    precomputed = precompute_backtest_signals(df_h1, df_m5, base_config)
+    print(f"  Xong: {int(precomputed.valid.sum())} nến M5 có score hợp lệ\n")
+
     print(
-        f"\nBắt đầu GA: population={args.population}, "
+        f"Bắt đầu GA: population={args.population}, "
         f"generations={args.generations}, workers={workers}, seed={args.seed}\n"
     )
 
@@ -1100,6 +1333,8 @@ def main(argv: list[str] | None = None) -> None:
         seed=args.seed,
         initial_balance=args.balance,
         workers=workers,
+        max_m5_bars=args.max_m5_bars,
+        precomputed=precomputed,
     )
 
     print_best_summary(best)
