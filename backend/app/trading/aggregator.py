@@ -7,6 +7,7 @@ import pandas as pd
 from app.models import BotConfig
 from app.trading.indicators.atr import average_true_range
 from app.trading.scoring import compute_strategy_scores
+from app.trading.trading_mode import resolve_entry_threshold, resolve_trend_threshold
 from app.trading.types import AggregatedSignal, NetSignal, OHLCV, StrategyResult
 
 # 4 chữ số thập phân — tránh float drift (0.35+0.30 → 0.649999… thay vì 0.65)
@@ -79,12 +80,12 @@ def aggregate_signal(
             raw_weighted *= atr_factor
         weighted = normalize_score(raw_weighted)
         used_results = results
-        threshold = normalize_score(config.signal_threshold * atr_factor)
+        threshold = resolve_entry_threshold(config, atr_factor)
     else:
         weighted = normalize_score(_weighted_trend_score(config, results))
         used_results = results[:2]
         trend_weight = config.donchian_weight + config.supertrend_weight
-        threshold = normalize_score(config.signal_threshold * trend_weight)
+        threshold = resolve_trend_threshold(config, trend_weight)
 
     if weighted >= threshold:
         net = int(NetSignal.BUY)
@@ -98,4 +99,4 @@ def aggregate_signal(
         weighted_score=weighted,
         net_signal=net,
     )
-
+

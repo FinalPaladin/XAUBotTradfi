@@ -93,6 +93,16 @@ def _filter_entry_signal(
     - SUPER_SAFE: không vào khi H1 NEUTRAL (chỉ thuận trend + ngưỡng cao).
     """
     if main_trend == MainTrend.BULLISH:
+        if super_safe:
+            if entry_score >= entry_threshold:
+                return int(NetSignal.BUY), False, (
+                    f"H1 BULLISH | M5 Score: {entry_score:+.2f} "
+                    f"-> Allowed LONG (SUPER_SAFE, need >= +{entry_threshold})"
+                )
+            return int(NetSignal.HOLD), False, (
+                f"H1 BULLISH | M5 Score: {entry_score:+.2f} "
+                f"-> BLOCKED (SUPER_SAFE need >= +{entry_threshold} LONG)"
+            )
         if entry_net == int(NetSignal.BUY):
             return entry_net, False, (
                 f"H1 BULLISH | M5 Score: {entry_score:+.2f} "
@@ -104,6 +114,16 @@ def _filter_entry_signal(
         )
 
     if main_trend == MainTrend.BEARISH:
+        if super_safe:
+            if entry_score <= -entry_threshold:
+                return int(NetSignal.SELL), False, (
+                    f"H1 BEARISH | M5 Score: {entry_score:+.2f} "
+                    f"-> Allowed SHORT (SUPER_SAFE, need <= -{entry_threshold})"
+                )
+            return int(NetSignal.HOLD), False, (
+                f"H1 BEARISH | M5 Score: {entry_score:+.2f} "
+                f"-> BLOCKED (SUPER_SAFE need <= -{entry_threshold} SHORT)"
+            )
         if entry_net == int(NetSignal.SELL):
             return entry_net, False, (
                 f"H1 BEARISH | M5 Score: {entry_score:+.2f} "

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
@@ -26,9 +27,16 @@ def _position_matches_bot_symbol(pos_symbol: str, bot_symbol: str) -> bool:
 
 
 class OrderExecutor:
-    def __init__(self, db: Session, client=None) -> None:
+    def __init__(
+        self,
+        db: Session,
+        client=None,
+        *,
+        on_trade_closed: Callable[[TradeHistory], None] | None = None,
+    ) -> None:
         self.db = db
         self._client = client or get_mt5_client()
+        self._on_trade_closed = on_trade_closed
 
     def sync_positions_with_mt5(self, bot: BotConfig) -> dict[str, int]:
         """
@@ -297,7 +305,19 @@ class OrderExecutor:
         self.db.add(history)
         self.db.delete(position)
         self.db.flush()
+        self._emit_trade_closed(history)
         return history
+
+    def _emit_trade_closed(self, history: TradeHistory) -> None:
+        if self._on_trade_closed is None:
+            return
+        try:
+            self._on_trade_closed(history)
+        except Exception:
+            logger.exception(
+                "on_trade_closed callback failed ticket=%s",
+                history.ticket_id,
+            )
 
     def _finalize_close_from_fill(
         self,

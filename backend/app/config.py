@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     worker_tick_seconds: int = 5
     mt5_connect_timeout_ms: int = 5000
 
+    # Telegram trade alerts (optional — worker skips when unset)
+    telegram_bot_token: str | None = None
+    telegram_chat_id: str | None = None
+
     @field_validator("mt5_login", mode="before")
     @classmethod
     def empty_login(cls, v: object) -> object:
@@ -42,7 +46,14 @@ class Settings(BaseSettings):
             return None
         return v
 
-    @field_validator("mt5_path", "mt5_password", "mt5_server", mode="before")
+    @field_validator(
+        "mt5_path",
+        "mt5_password",
+        "mt5_server",
+        "telegram_bot_token",
+        "telegram_chat_id",
+        mode="before",
+    )
     @classmethod
     def empty_optional_str(cls, v: object) -> object:
         if v == "":

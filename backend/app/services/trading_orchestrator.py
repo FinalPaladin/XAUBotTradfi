@@ -6,9 +6,11 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from app.models import BotConfig, BotStatus, LogLevel, OrderSide, TradePosition
+from app.models import BotConfig, BotStatus, LogLevel, OrderSide, TradePosition, TradingMode
 from app.services.logging_service import log_message
 from app.services.mt5_client import get_mt5_client
+from app.services.telegram.bridge import notify_trade_closed, notify_trade_opened
+from app.services.telegram.notifier import TradeAlertNotifier, get_trade_alert_notifier
 from app.trading.basket_manager import (
     BasketContext,
     build_position_basket,
@@ -96,10 +98,21 @@ def _build_tick_summary(
 
 
 class TradingOrchestrator:
-    def __init__(self, db: Session) -> None:
+    def __init__(
+        self,
+        db: Session,
+        *,
+        alert_notifier: TradeAlertNotifier | None = None,
+    ) -> None:
         self.db = db
         self._market = MarketDataProvider()
-        self._executor = OrderExecutor(db)
+        self._alerts = alert_notifier or get_trade_alert_notifier()
+        self._executor = OrderExecutor(
+            db,
+            on_trade_closed=lambda history: notify_trade_closed(
+                self._alerts, history
+            ),
+        )
         self._mt5 = get_mt5_client()
 
     def run_tick(self, bot: BotConfig) -> dict:
@@ -140,6 +153,61 @@ class TradingOrchestrator:
                 .all()
             )
             open_count = len(open_positions)
+
+            daily_guard = evaluate_daily_guard(
+                self.db, bot.id, open_positions, price, account_balance
+            )
+            if daily_guard.switch_to_super_safe:
+                if bot.trading_mode != TradingMode.SUPER_SAFE:
+                    bot.trading_mode = TradingMode.SUPER_SAFE
+                    log_message(
+                        self.db,
+                        f"DAILY PROFIT LOCK: {daily_guard.reason}",
+                        bot_id=bot.id,
+                        level=LogLevel.INFO,
+                        source="daily_guard",
+                    )
+                    self.db.flush()
+                elif daily_guard.reason:
+                    logger.info(
+                        "bot_id=%s daily guard: %s (vẫn mở lệnh SUPER_SAFE)",
+                        bot.id,
+                        daily_guard.reason,
+                    )
+
+            if daily_guard.trigger_dca_full_stack_loss:
+                closed = close_all_and_enter_super_safe(
+                    bot,
+                    open_positions,
+                    self._executor,
+                    self._mt5,
+                    self.db,
+                    reason="DCA_FULL_STACK_LOSS",
+                )
+                log_message(
+                    self.db,
+                    f"DAILY LOSS CAP: {daily_guard.reason} closed={closed}",
+                    bot_id=bot.id,
+                    level=LogLevel.WARNING,
+                    source="daily_guard",
+                )
+                self.db.commit()
+                trend_signal = check_trend_and_entry_signal(bot, self._market)
+                return {
+                    "summary": _build_tick_summary(
+                        bot,
+                        price=price,
+                        open_count=0,
+                        account_balance=account_balance,
+                        drawdown_percent=0.0,
+                        floating_pnl=0.0,
+                        trend_signal=trend_signal,
+                        action=(
+                            f"DAILY LOSS 40% — đóng {closed} lệnh, "
+                            f"chuyển SUPER_SAFE"
+                        ),
+                    )
+                }
 
             trend_signal = check_trend_and_entry_signal(bot, self._market)
             signal = trend_signal.as_aggregated()
@@ -190,43 +258,6 @@ class TradingOrchestrator:
                         )
                     )
                 }
-
-            daily_guard = evaluate_daily_guard(
-                self.db, bot.id, open_positions, price, account_balance
-            )
-            if daily_guard.trigger_dca_full_stack_loss:
-                closed = close_all_and_enter_super_safe(
-                    bot,
-                    open_positions,
-                    self._executor,
-                    self._mt5,
-                    self.db,
-                    reason="DCA_FULL_STACK_LOSS",
-                )
-                log_message(
-                    self.db,
-                    f"DAILY LOSS CAP: {daily_guard.reason} closed={closed}",
-                    bot_id=bot.id,
-                    level=LogLevel.WARNING,
-                    source="daily_guard",
-                )
-                self.db.commit()
-                return {
-                    "summary": make_summary(
-                        action=(
-                            f"DAILY LOSS 40% — đóng {closed} lệnh, "
-                            f"chuyển SUPER_SAFE"
-                        )
-                    )
-                }
-
-            block_new_entries = daily_guard.block_new_entries
-            if block_new_entries and daily_guard.reason:
-                logger.info(
-                    "bot_id=%s daily guard: %s (manage only)",
-                    bot.id,
-                    daily_guard.reason,
-                )
 
             atr_meta = trend_signal.meta.get("atr") or {}
             atr_value = atr_meta.get("current_atr")
@@ -334,8 +365,7 @@ class TradingOrchestrator:
                 side_max_layers = effective_max_layers(bot, basket, basket_ctx)
 
                 if (
-                    not block_new_entries
-                    and should_add_dca_layer(
+                    should_add_dca_layer(
                         bot,
                         basket,
                         price,
@@ -357,7 +387,17 @@ class TradingOrchestrator:
                     )
                     action_msg = None
                     if plan:
-                        self._executor.open_position(bot, plan)
+                        position = self._executor.open_position(bot, plan)
+                        if position is not None:
+                            notify_trade_opened(
+                                self._alerts,
+                                plan,
+                                position,
+                                trend_signal,
+                                extra=(
+                                    f"DCA lớp {next_layer + 1}/{side_max_layers}"
+                                ),
+                            )
                         log_message(
                             self.db,
                             f"DCA layer {next_layer + 1}/{side_max_layers} "
@@ -373,7 +413,7 @@ class TradingOrchestrator:
                     return {"summary": make_summary(action=action_msg)}
 
             action_msg = None
-            if not block_new_entries and should_open_reversal_hedge_layer(
+            if should_open_reversal_hedge_layer(
                 signal,
                 open_positions,
                 is_scalp_mode=trend_signal.is_scalp_mode,
@@ -385,7 +425,15 @@ class TradingOrchestrator:
                     equity=account_balance,
                 )
                 if plan:
-                    self._executor.open_position(bot, plan)
+                    position = self._executor.open_position(bot, plan)
+                    if position is not None:
+                        notify_trade_opened(
+                            self._alerts,
+                            plan,
+                            position,
+                            trend_signal,
+                            extra="REVERSAL HEDGE — basket ngược chiều",
+                        )
                     filter_log = trend_signal.meta.get("filter_log", "")
                     log_message(
                         self.db,
@@ -408,7 +456,7 @@ class TradingOrchestrator:
                     self.db.commit()
                     return {"summary": make_summary(action=action_msg)}
 
-            if not block_new_entries and should_open_initial_layer(signal, open_positions):
+            if should_open_initial_layer(signal, open_positions):
                 fresh_positions = (
                     self.db.query(TradePosition)
                     .filter(TradePosition.bot_id == bot.id)
@@ -433,6 +481,13 @@ class TradingOrchestrator:
                                 action="Bỏ qua mở lớp 1 — đã có lệnh cùng chiều"
                             )
                         }
+                    notify_trade_opened(
+                        self._alerts,
+                        plan,
+                        opened,
+                        trend_signal,
+                        extra="Lớp 1" + (" · SCALP MODE" if trend_signal.is_scalp_mode else ""),
+                    )
                     scalp_tag = " SCALP_MODE" if trend_signal.is_scalp_mode else ""
                     filter_log = trend_signal.meta.get("filter_log", "")
                     log_message(

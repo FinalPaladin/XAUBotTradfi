@@ -11,7 +11,7 @@ NORMAL_BASKET_TP_USD = 1.0
 NORMAL_FULL_STACK_LOSS_PCT = 40.0
 
 # SUPER_SAFE — stricter entry, smaller stack, tighter exits
-SUPER_SAFE_SIGNAL_THRESHOLD = 0.90
+SUPER_SAFE_SIGNAL_THRESHOLD = 0.80
 SUPER_SAFE_MAX_LAYERS = 2
 SUPER_SAFE_LAYER_SPACING = 5.0
 SUPER_SAFE_BASKET_TP_USD = 0.5
@@ -28,6 +28,26 @@ def effective_signal_threshold(config: BotConfig) -> float:
     if is_super_safe(config):
         return max(config.signal_threshold, SUPER_SAFE_SIGNAL_THRESHOLD)
     return config.signal_threshold
+
+
+def resolve_entry_threshold(config: BotConfig, atr_factor: float = 1.0) -> float:
+    """Ngưỡng M5 entry — SUPER_SAFE: cố định 0.80, không hạ bởi ATR dampen."""
+    from app.trading.aggregator import normalize_score
+
+    base = effective_signal_threshold(config)
+    if is_super_safe(config):
+        return normalize_score(base)
+    return normalize_score(base * atr_factor)
+
+
+def resolve_trend_threshold(config: BotConfig, trend_weight: float) -> float:
+    """Ngưỡng H1 trend — SUPER_SAFE: cố định 0.80."""
+    from app.trading.aggregator import normalize_score
+
+    base = effective_signal_threshold(config)
+    if is_super_safe(config):
+        return normalize_score(base)
+    return normalize_score(base * trend_weight)
 
 
 def effective_scalp_entry_threshold(config: BotConfig) -> float:

@@ -106,7 +106,7 @@ def test_get_today_realized_pnl(db, guard_config) -> None:
     assert get_today_realized_pnl(db, guard_config.id) == 5.0
 
 
-def test_daily_profit_lock_blocks_new_entries(db, guard_config) -> None:
+def test_daily_profit_lock_switches_super_safe(db, guard_config) -> None:
     now = datetime.now(timezone.utc)
     db.add(
         TradeHistory(
@@ -123,9 +123,9 @@ def test_daily_profit_lock_blocks_new_entries(db, guard_config) -> None:
     )
     db.commit()
     status = evaluate_daily_guard(db, guard_config.id, [], 4300.0, 200.0)
-    assert status.block_new_entries is True
+    assert status.switch_to_super_safe is True
     assert status.trigger_dca_full_stack_loss is False
-    assert "PROFIT_LOCK" in (status.reason or "")
+    assert "SUPER_SAFE" in (status.reason or "")
 
 
 def test_daily_loss_cap_triggers_at_40pct_balance(db, guard_config) -> None:
@@ -149,7 +149,7 @@ def test_daily_loss_cap_triggers_at_40pct_balance(db, guard_config) -> None:
         db, guard_config.id, [], 4300.0, account_balance=100.0
     )
     assert status_small.trigger_dca_full_stack_loss is False
-    assert status_small.block_new_entries is False
+    assert status_small.switch_to_super_safe is False
 
     db.add(
         TradeHistory(
@@ -170,7 +170,7 @@ def test_daily_loss_cap_triggers_at_40pct_balance(db, guard_config) -> None:
     )
     assert status_hit.trigger_dca_full_stack_loss is True
     assert "DCA_FULL_STACK_LOSS" in (status_hit.reason or "")
-    assert status_hit.block_new_entries is False
+    assert status_hit.switch_to_super_safe is False
 
 
 def test_max_basket_age_forces_close(guard_config: BotConfig) -> None:

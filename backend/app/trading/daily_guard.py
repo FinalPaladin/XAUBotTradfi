@@ -1,4 +1,4 @@
-"""Daily PNL guard — profit lock; loss cap at 40% balance → DCA_FULL_STACK_LOSS."""
+"""Daily PNL guard — profit → SUPER_SAFE; loss cap at 40% balance → DCA_FULL_STACK_LOSS."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ class DailyGuardStatus:
     realized_today: float
     floating_pnl: float
     total_day_pnl: float
-    block_new_entries: bool
+    switch_to_super_safe: bool
     trigger_dca_full_stack_loss: bool
     reason: str | None = None
 
@@ -80,8 +80,7 @@ def evaluate_daily_guard(
     balance = account_balance if account_balance > 0 else 200.0
     loss_limit = round(balance * loss_cap_pct / 100.0, 2)
     trigger_loss = total <= -loss_limit
-
-    block_new = total >= profit_lock_usd
+    switch_safe = total >= profit_lock_usd
 
     reason: str | None = None
     if trigger_loss:
@@ -89,17 +88,17 @@ def evaluate_daily_guard(
             f"DAILY_LOSS_CAP total={total:.2f} USD "
             f"≤ -{loss_limit:.2f} ({loss_cap_pct}% balance) → DCA_FULL_STACK_LOSS"
         )
-    elif block_new:
+    elif switch_safe:
         reason = (
             f"DAILY_PROFIT_LOCK total={total:.2f} USD "
-            f"(realized={realized:.2f}, floating={floating:.2f})"
+            f"(realized={realized:.2f}, floating={floating:.2f}) → SUPER_SAFE"
         )
 
     return DailyGuardStatus(
         realized_today=realized,
         floating_pnl=floating,
         total_day_pnl=total,
-        block_new_entries=block_new,
+        switch_to_super_safe=switch_safe,
         trigger_dca_full_stack_loss=trigger_loss,
         reason=reason,
     )

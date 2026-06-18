@@ -222,3 +222,28 @@ def test_filter_entry_signal_neutral_threshold() -> None:
     )
     assert net == int(NetSignal.BUY)
     assert scalp is True
+
+
+def test_super_safe_bearish_requires_high_score() -> None:
+    net, _, log = _filter_entry_signal(
+        int(NetSignal.SELL),
+        -0.47,
+        MainTrend.BEARISH,
+        entry_threshold=0.80,
+        scalp_threshold=1.0,
+        super_safe=True,
+    )
+    assert net == int(NetSignal.HOLD)
+    assert "SUPER_SAFE" in log
+    assert "0.8" in log
+
+    net_ok, _, log_ok = _filter_entry_signal(
+        int(NetSignal.SELL),
+        -0.85,
+        MainTrend.BEARISH,
+        entry_threshold=0.80,
+        scalp_threshold=1.0,
+        super_safe=True,
+    )
+    assert net_ok == int(NetSignal.SELL)
+    assert "Allowed SHORT" in log_ok

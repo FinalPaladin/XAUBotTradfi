@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.models import BotConfig
 from app.trading.aggregator import SCORE_DECIMALS, normalize_score
+from app.trading.trading_mode import resolve_entry_threshold, resolve_trend_threshold
 from app.trading.types import NetSignal, StrategyResult
 
 _DISPLAY_NAMES = {
@@ -46,7 +47,7 @@ def breakdown_weighted_score(
             (results[2], config.rsi_weight),
             (results[3], config.ema_weight),
         ]
-        threshold = normalize_score(config.signal_threshold * atr_factor)
+        threshold = resolve_entry_threshold(config, atr_factor)
     else:
         trend_weight = config.donchian_weight + config.supertrend_weight
         if trend_weight <= 0:
@@ -64,7 +65,7 @@ def breakdown_weighted_score(
             (results[0], config.donchian_weight / trend_weight),
             (results[1], config.supertrend_weight / trend_weight),
         ]
-        threshold = normalize_score(config.signal_threshold * trend_weight)
+        threshold = resolve_trend_threshold(config, trend_weight)
 
     scores: dict[str, float | None] = {
         "donchian": 0.0,
@@ -104,4 +105,4 @@ def breakdown_weighted_score(
 def format_pnl(value: float) -> str:
     sign = "+" if value >= 0 else ""
     return f"{sign}{value:.2f}"
-
+
