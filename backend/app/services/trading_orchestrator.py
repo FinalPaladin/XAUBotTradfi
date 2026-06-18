@@ -1,4 +1,4 @@
-"""Single tick: drawdown guard → multi-TF signal → basket DCA → execute."""
+"""Single tick: position loss guard → multi-TF signal → basket DCA → execute."""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ from app.trading.basket_manager import (
     BasketContext,
     build_position_basket,
     calculate_net_pnl_usd,
-    check_position_dca_layer_tp,
     effective_max_layers,
     evaluate_basket,
     should_add_dca_layer,
@@ -23,9 +22,10 @@ from app.trading.basket_manager import (
 )
 from app.trading.daily_guard import evaluate_daily_guard
 from app.trading.drawdown_guard import (
-    evaluate_drawdown,
-    panic_close_all,
-    partial_close_worst_orders,
+    close_all_and_enter_super_safe,
+    compute_total_floating_pnl,
+    current_drawdown_percent,
+    evaluate_position_loss_guard,
 )
 from app.trading.execution import OrderExecutor
 from app.trading.market_data import MarketDataProvider
@@ -67,6 +67,7 @@ def _build_tick_summary(
     )
     return {
         "bot_id": bot.id,
+        "trading_mode": getattr(bot.trading_mode, "value", bot.trading_mode),
         "price": round(price, 2),
         "open_count": open_count,
         "balance": round(account_balance, 2),
@@ -143,7 +144,12 @@ class TradingOrchestrator:
             trend_signal = check_trend_and_entry_signal(bot, self._market)
             signal = trend_signal.as_aggregated()
 
-            dd_status = evaluate_drawdown(
+            floating_pnl = compute_total_floating_pnl(
+                open_positions, self._mt5, price
+            )
+            dd_pct = current_drawdown_percent(floating_pnl, account_balance)
+
+            loss_guard = evaluate_position_loss_guard(
                 open_positions, account_balance, self._mt5, price
             )
 
@@ -153,59 +159,53 @@ class TradingOrchestrator:
                     price=price,
                     open_count=open_count,
                     account_balance=account_balance,
-                    drawdown_percent=dd_status.drawdown_percent,
-                    floating_pnl=dd_status.floating_loss_usd,
+                    drawdown_percent=dd_pct,
+                    floating_pnl=floating_pnl,
                     trend_signal=trend_signal,
                     action=action,
                 )
 
-            if dd_status.action == "PANIC_CLOSE":
-                closed = panic_close_all(
-                    bot, open_positions, self._executor, self._mt5, self.db
+            if loss_guard.action == "CLOSE_ALL_SUPER_SAFE":
+                closed = close_all_and_enter_super_safe(
+                    bot,
+                    open_positions,
+                    self._executor,
+                    self._mt5,
+                    self.db,
                 )
                 log_message(
                     self.db,
-                    f"PANIC CLOSE: DD={dd_status.drawdown_percent}% "
-                    f"closed={closed} bot STOPPED",
+                    f"POSITION LOSS 16U: worst={loss_guard.worst_position_pnl} "
+                    f"closed={closed} → SUPER_SAFE",
                     bot_id=bot.id,
-                    level=LogLevel.ERROR,
-                    source="drawdown_guard",
+                    level=LogLevel.WARNING,
+                    source="position_loss_guard",
                 )
                 self.db.commit()
                 return {
                     "summary": make_summary(
-                        action=f"PANIC CLOSE — đóng {closed} lệnh, bot STOPPED"
+                        action=(
+                            f"LOSS GUARD 16U — đóng {closed} lệnh, "
+                            f"chuyển SUPER_SAFE"
+                        )
                     )
                 }
 
-            if dd_status.action == "PARTIAL_CLOSE":
-                n = partial_close_worst_orders(
-                    bot, open_positions, self._executor, self._mt5, price
-                )
-                if n:
-                    log_message(
-                        self.db,
-                        f"DD partial close: DD={dd_status.drawdown_percent}% "
-                        f"closed_worst={n}",
-                        bot_id=bot.id,
-                        level=LogLevel.WARNING,
-                        source="drawdown_guard",
-                    )
-                    self.db.commit()
-                    return {
-                        "summary": make_summary(
-                            action=f"DD PARTIAL — đóng {n} lệnh lỗ nặng nhất"
-                        )
-                    }
-
             daily_guard = evaluate_daily_guard(
-                self.db, bot.id, open_positions, price
+                self.db, bot.id, open_positions, price, account_balance
             )
-            if daily_guard.stop_bot:
-                bot.status = BotStatus.STOPPED
+            if daily_guard.trigger_dca_full_stack_loss:
+                closed = close_all_and_enter_super_safe(
+                    bot,
+                    open_positions,
+                    self._executor,
+                    self._mt5,
+                    self.db,
+                    reason="DCA_FULL_STACK_LOSS",
+                )
                 log_message(
                     self.db,
-                    f"DAILY LOSS CAP: {daily_guard.reason} — bot STOPPED",
+                    f"DAILY LOSS CAP: {daily_guard.reason} closed={closed}",
                     bot_id=bot.id,
                     level=LogLevel.WARNING,
                     source="daily_guard",
@@ -213,7 +213,10 @@ class TradingOrchestrator:
                 self.db.commit()
                 return {
                     "summary": make_summary(
-                        action=f"DAILY LOSS CAP — {daily_guard.reason}, bot STOPPED"
+                        action=(
+                            f"DAILY LOSS 40% — đóng {closed} lệnh, "
+                            f"chuyển SUPER_SAFE"
+                        )
                     )
                 }
 
@@ -310,25 +313,6 @@ class TradingOrchestrator:
                     return {"summary": make_summary(action=action_label)}
 
                 for pos in side_positions:
-                    if check_position_dca_layer_tp(
-                        bot, pos, price, account_balance
-                    ):
-                        self._executor.close_position(bot, pos, "DCA_LAYER_TP")
-                        log_message(
-                            self.db,
-                            f"DCA layer TP close ticket={pos.ticket_id} "
-                            f"layer={(pos.layer_index or 0) + 1}",
-                            bot_id=bot.id,
-                            source="execution",
-                        )
-                        self.db.commit()
-                        return {
-                            "summary": make_summary(
-                                action=f"DCA TP lớp {(pos.layer_index or 0) + 1} "
-                                f"ticket={pos.ticket_id}"
-                            )
-                        }
-
                     pos_decision = evaluate_position(
                         bot,
                         pos,

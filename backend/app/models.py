@@ -25,6 +25,11 @@ class BotStatus(str, enum.Enum):
     STOPPED = "STOPPED"
 
 
+class TradingMode(str, enum.Enum):
+    NORMAL = "NORMAL"
+    SUPER_SAFE = "SUPER_SAFE"
+
+
 class OrderSide(str, enum.Enum):
     BUY = "BUY"
     SELL = "SELL"
@@ -49,12 +54,17 @@ class BotConfig(Base):
         default=BotStatus.STOPPED,
         nullable=False,
     )
+    trading_mode: Mapped[TradingMode] = mapped_column(
+        Enum(TradingMode),
+        default=TradingMode.NORMAL,
+        nullable=False,
+    )
 
     symbol: Mapped[str] = mapped_column(String(32), default="XAUUSD+", nullable=False)
     timeframe: Mapped[str] = mapped_column(String(8), default="M5", nullable=False)
     bars_lookback: Mapped[int] = mapped_column(Integer, default=500, nullable=False)
     risk_per_trade_pct: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
-    max_open_positions: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    max_open_positions: Mapped[int] = mapped_column(Integer, default=4, nullable=False)
     magic_number: Mapped[int] = mapped_column(Integer, default=202501, nullable=False)
     rsi_swing_lookback: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
 
@@ -66,7 +76,7 @@ class BotConfig(Base):
     trailing_stop_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # Multi-layer DCA Scalping (Bybit Master Trader style)
-    max_layers: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
+    max_layers: Mapped[int] = mapped_column(Integer, default=4, nullable=False)
     isolated_leverage: Mapped[int] = mapped_column(Integer, default=50, nullable=False)
     base_equity_usd: Mapped[float] = mapped_column(Float, default=200.0, nullable=False)
     first_layer_notional_usd: Mapped[float] = mapped_column(
@@ -75,9 +85,9 @@ class BotConfig(Base):
     dca_volume_multiplier: Mapped[float] = mapped_column(
         Float, default=1.35, nullable=False
     )
-    layer_spacing_min: Mapped[float] = mapped_column(Float, default=5.0, nullable=False)
-    layer_spacing_max: Mapped[float] = mapped_column(Float, default=7.0, nullable=False)
-    basket_tp_min_usd: Mapped[float] = mapped_column(Float, default=2.0, nullable=False)
+    layer_spacing_min: Mapped[float] = mapped_column(Float, default=4.0, nullable=False)
+    layer_spacing_max: Mapped[float] = mapped_column(Float, default=4.0, nullable=False)
+    basket_tp_min_usd: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
     basket_tp_max_usd: Mapped[float] = mapped_column(Float, default=5.0, nullable=False)
     single_tp_min_usd: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
     single_tp_max_usd: Mapped[float] = mapped_column(Float, default=2.0, nullable=False)
@@ -89,7 +99,7 @@ class BotConfig(Base):
         Float, default=50.0, nullable=False
     )
     max_basket_loss_pct: Mapped[float] = mapped_column(
-        Float, default=0.0, nullable=False
+        Float, default=40.0, nullable=False
     )
     counter_trend_max_layers: Mapped[int] = mapped_column(
         Integer, default=5, nullable=False

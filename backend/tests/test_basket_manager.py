@@ -38,11 +38,11 @@ def dca_config() -> BotConfig:
         status=BotStatus.RUNNING,
         symbol="XAUUSD+",
         timeframe="M5",
-        max_open_positions=5,
-        max_layers=5,
-        layer_spacing_min=5.0,
-        layer_spacing_max=7.0,
-        basket_tp_min_usd=2.0,
+        max_open_positions=4,
+        max_layers=4,
+        layer_spacing_min=4.0,
+        layer_spacing_max=4.0,
+        basket_tp_min_usd=1.0,
         basket_tp_max_usd=5.0,
         single_tp_min_usd=1.0,
         single_tp_max_usd=2.0,
@@ -111,10 +111,10 @@ def test_single_layer_scalp_tp_usd(dca_config: BotConfig) -> None:
     assert check_single_layer_scalp_tp(dca_config, basket, 2650.5)
 
 
-def test_joint_tp_requires_2_usd_for_dca(dca_config: BotConfig) -> None:
+def test_joint_tp_requires_1_usd_for_dca(dca_config: BotConfig) -> None:
     basket = _basket_buy([(2650.0, 0.02), (2645.0, 0.027)])
-    assert not check_joint_take_profit(dca_config, basket, 2647.5)
-    assert check_joint_take_profit(dca_config, basket, 2650.0)
+    assert not check_joint_take_profit(dca_config, basket, 2647.3)
+    assert check_joint_take_profit(dca_config, basket, 2647.4)
 
 
 def test_check_hard_stop_12_gold(dca_config: BotConfig) -> None:
@@ -214,7 +214,8 @@ def test_panic_signal_exit_short_basket_strong_buy() -> None:
     assert check_panic_signal_exit(basket, ctx)
 
 
-def test_evaluate_basket_panic_signal_priority(dca_config: BotConfig) -> None:
+def test_evaluate_basket_panic_signal_disabled(dca_config: BotConfig) -> None:
+    """PANIC_SIGNAL tắt — DCA gồng, không cắt theo M5 panic."""
     basket = _basket_buy([(2650.0, 0.02), (2645.0, 0.027)])
     ctx = BasketContext(main_trend=MainTrend.BULLISH, entry_score=-0.9)
     decision = evaluate_basket(
@@ -224,21 +225,26 @@ def test_evaluate_basket_panic_signal_priority(dca_config: BotConfig) -> None:
         AggregatedSignal([], 0.0, int(NetSignal.HOLD)),
         ctx=ctx,
     )
-    assert decision.action == BasketAction.CLOSE_PANIC_SIGNAL
-    assert decision.close_reason == "PANIC_SIGNAL"
+    assert decision.action != BasketAction.CLOSE_PANIC_SIGNAL
 
 
-def test_evaluate_basket_trend_flip_priority(dca_config: BotConfig) -> None:
-    basket = _basket_sell([(2650.0, 0.02)])
-    ctx = BasketContext(main_trend=MainTrend.BULLISH)
+def test_evaluate_basket_m5_reversal_disabled(dca_config: BotConfig) -> None:
+    """M5_REVERSAL tắt — basket lỗ + M5 flip vẫn HOLD để DCA."""
+    basket = _basket_sell([(2650.0, 0.02), (2654.0, 0.027)])
+    ctx = BasketContext(
+        main_trend=MainTrend.BEARISH,
+        entry_net_raw=int(NetSignal.BUY),
+        entry_score=0.6,
+    )
     decision = evaluate_basket(
         dca_config,
         basket,
-        2654.0,
+        2655.0,
         AggregatedSignal([], 0.0, int(NetSignal.HOLD)),
         ctx=ctx,
     )
-    assert decision.action == BasketAction.CLOSE_TREND_FLIP
+    assert decision.action != BasketAction.CLOSE_M5_REVERSAL
+    assert decision.action == BasketAction.HOLD
 
 
 def test_effective_max_layers_counter_trend(dca_config: BotConfig) -> None:

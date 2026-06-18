@@ -2,41 +2,42 @@
 
 from sqlalchemy.orm import Session
 
-from app.models import BotConfig, BotStatus
+from app.models import BotConfig, BotStatus, TradingMode
 
 
 def _default_xauusd_bot() -> BotConfig:
-    """Multi-layer DCA Scalping XAUUSD — M5, leverage x50, max 5 layers."""
+    """Multi-layer DCA Scalping XAUUSD — M5, 4 lớp, spacing 4 giá."""
     return BotConfig(
         name="XAUUSD Primary",
         status=BotStatus.STOPPED,
+        trading_mode=TradingMode.NORMAL,
         symbol="XAUUSD+",
         timeframe="M5",
         bars_lookback=500,
         risk_per_trade_pct=1.0,
-        max_open_positions=5,
+        max_open_positions=4,
         magic_number=202501,
         rsi_swing_lookback=5,
         take_profit_pct=0.05,
         stop_loss_pct=0.0,
         trailing_stop_enabled=False,
         trailing_stop_pct=None,
-        max_layers=5,
+        max_layers=4,
         isolated_leverage=50,
         base_equity_usd=200.0,
         first_layer_notional_usd=6750.0,
         dca_volume_multiplier=1.35,
-        layer_spacing_min=5.0,
-        layer_spacing_max=7.0,
-        basket_tp_min_usd=2.0,
+        layer_spacing_min=4.0,
+        layer_spacing_max=4.0,
+        basket_tp_min_usd=1.0,
         basket_tp_max_usd=5.0,
-        single_tp_min_usd=2.0,
+        single_tp_min_usd=1.0,
         single_tp_max_usd=3.0,
         single_tp_distance=2.0,
         hard_stop_adverse_distance=9.0,
         max_basket_loss_usd=50.0,
-        max_basket_loss_pct=0.0,
-        counter_trend_max_layers=5,
+        max_basket_loss_pct=40.0,
+        counter_trend_max_layers=4,
         atr_stop_multiplier=2.0,
         basket_time_stop_minutes=60,
         donchian_period=20,

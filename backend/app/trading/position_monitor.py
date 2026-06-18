@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 from app.models import BotConfig, OrderSide, TradePosition
-from app.trading.basket_manager import check_position_dca_layer_tp
 from app.trading.types import AggregatedSignal, PositionAction, PositionDecision
 
 
@@ -29,18 +28,10 @@ def evaluate_position(
     ticket = position.ticket_id
     layer_index = getattr(position, "layer_index", 0) or 0
 
-    if layer_index >= 1:
-        if check_position_dca_layer_tp(
-            config, position, current_price, account_balance
-        ):
-            return PositionDecision(
-                PositionAction.CLOSE_DCA_LAYER_TP,
-                ticket,
-                close_reason="DCA_LAYER_TP",
-            )
+    if basket_is_multi_layer:
         return PositionDecision(PositionAction.HOLD, ticket)
 
-    if basket_is_multi_layer:
+    if layer_index >= 1:
         return PositionDecision(PositionAction.HOLD, ticket)
 
     tp = position.current_tp

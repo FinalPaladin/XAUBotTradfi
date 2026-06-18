@@ -1,4 +1,5 @@
 export type BotStatus = "RUNNING" | "STOPPED";
+export type TradingMode = "NORMAL" | "SUPER_SAFE";
 export type OrderSide = "BUY" | "SELL";
 export type LogLevel = "DEBUG" | "INFO" | "WARNING" | "ERROR";
 
@@ -6,6 +7,7 @@ export interface BotConfig {
   id: number;
   name: string;
   status: BotStatus;
+  trading_mode: TradingMode;
   symbol: string;
   timeframe: string;
   bars_lookback: number;

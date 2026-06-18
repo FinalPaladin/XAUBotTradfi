@@ -205,11 +205,64 @@ def _migrate_risk_tuning() -> None:
                     "WHERE single_tp_min_usd <= 1.0 OR single_tp_distance <= 1.2"
                 )
             )
-        if "layer_spacing_min" in existing:
+        if "basket_time_stop_minutes" in existing:
             conn.execute(
                 text(
-                    "UPDATE bot_config SET layer_spacing_min = 6.0 "
-                    "WHERE layer_spacing_min < 6.0"
+                    "UPDATE bot_config SET basket_time_stop_minutes = 60 "
+                    "WHERE basket_time_stop_minutes IS NULL"
+                )
+            )
+
+
+def _migrate_trading_mode_and_dca_v4() -> None:
+    """Add trading_mode column + DCA-4 defaults."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if "bot_config" not in insp.get_table_names():
+        return
+
+    existing = {c["name"] for c in insp.get_columns("bot_config")}
+    alters: list[str] = []
+    if "trading_mode" not in existing:
+        alters.append(
+            "ALTER TABLE bot_config ADD COLUMN trading_mode "
+            "VARCHAR(16) NOT NULL DEFAULT 'NORMAL'"
+        )
+
+    with engine.begin() as conn:
+        for stmt in alters:
+            conn.execute(text(stmt))
+
+        if engine.dialect.name == "mysql":
+            conn.execute(
+                text(
+                    "UPDATE bot_config SET "
+                    "max_layers = 4, "
+                    "max_open_positions = GREATEST(max_open_positions, 4), "
+                    "layer_spacing_min = 4.0, "
+                    "layer_spacing_max = 4.0, "
+                    "basket_tp_min_usd = 1.0, "
+                    "single_tp_min_usd = 1.0, "
+                    "max_basket_loss_pct = 40.0 "
+                    "WHERE max_layers >= 5 OR layer_spacing_min >= 5.0 "
+                    "OR basket_tp_min_usd >= 2.0"
+                )
+            )
+        else:
+            conn.execute(
+                text(
+                    "UPDATE bot_config SET "
+                    "max_layers = 4, "
+                    "max_open_positions = CASE WHEN max_open_positions < 4 "
+                    "THEN 4 ELSE max_open_positions END, "
+                    "layer_spacing_min = 4.0, "
+                    "layer_spacing_max = 4.0, "
+                    "basket_tp_min_usd = 1.0, "
+                    "single_tp_min_usd = 1.0, "
+                    "max_basket_loss_pct = 40.0 "
+                    "WHERE max_layers >= 5 OR layer_spacing_min >= 5.0 "
+                    "OR basket_tp_min_usd >= 2.0"
                 )
             )
 
@@ -336,6 +389,7 @@ def init_db() -> None:
     _migrate_risk_tuning()
     _migrate_trade_history_dedupe()
     _migrate_dca_strategy_v2()
+    _migrate_trading_mode_and_dca_v4()
     _migrate_fix_history_opened_at_shift()
     with SessionLocal() as db:
         if seed_if_empty(db):

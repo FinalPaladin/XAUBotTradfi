@@ -11,9 +11,28 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api } from "@/lib/api";
-import type { BotConfig } from "@/lib/types";
+import type { BotConfig, TradingMode } from "@/lib/types";
 
 const TIMEFRAMES = ["M1", "M5", "M15", "M30", "H1", "H4", "D1"] as const;
+
+const TRADING_MODES: {
+  value: TradingMode;
+  title: string;
+  description: string;
+}[] = [
+  {
+    value: "NORMAL",
+    title: "Normal",
+    description:
+      "DCA 4 lớp, spacing 4 giá, chốt ~$1, full stack lỗ 40% balance.",
+  },
+  {
+    value: "SUPER_SAFE",
+    title: "Siêu an toàn",
+    description:
+      "Chỉ vào thuận H1 + score cao, tối đa 2 lớp, chốt nhanh hơn. Dùng ngày news/risk cao.",
+  },
+];
 
 export function BotConfigPage() {
   const [bot, setBot] = useState<BotConfig | null>(null);
@@ -93,6 +112,9 @@ export function BotConfigPage() {
           <Badge variant={bot.status === "RUNNING" ? "success" : "secondary"}>
             {bot.status}
           </Badge>
+          <Badge variant={bot.trading_mode === "SUPER_SAFE" ? "destructive" : "outline"}>
+            {bot.trading_mode === "SUPER_SAFE" ? "Siêu an toàn" : "Normal"}
+          </Badge>
           <Button variant="outline" onClick={toggleRun}>
             {bot.status === "RUNNING" ? "Dừng bot" : "Bật bot"}
           </Button>
@@ -105,6 +127,43 @@ export function BotConfigPage() {
       {message && (
         <p className="text-sm text-muted-foreground">{message}</p>
       )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Chế độ giao dịch</CardTitle>
+          <CardDescription>
+            Normal cho ngày thường; Siêu an toàn khi news hoặc sau daily loss /
+            loss guard 16U.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 sm:grid-cols-2">
+          {TRADING_MODES.map((mode) => {
+            const selected = bot.trading_mode === mode.value;
+            return (
+              <button
+                key={mode.value}
+                type="button"
+                onClick={() => updateField("trading_mode", mode.value)}
+                className={`rounded-lg border p-4 text-left transition-colors ${
+                  selected
+                    ? "border-primary bg-primary/5 ring-2 ring-primary"
+                    : "border-border hover:border-primary/50"
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold">{mode.title}</span>
+                  {selected && (
+                    <Badge variant="success">Đang dùng</Badge>
+                  )}
+                </div>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  {mode.description}
+                </p>
+              </button>
+            );
+          })}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
@@ -143,8 +202,8 @@ export function BotConfigPage() {
         <CardHeader>
           <CardTitle>Multi-layer DCA Scalping</CardTitle>
           <CardDescription>
-            Bybit Master Trader style — tối đa {bot.max_layers ?? 5} lớp, đòn bẩy
-            isolated, Joint Close basket
+            Tối đa {bot.max_layers ?? 4} lớp (gốc + DCA), spacing 4 giá,
+            Joint Close ~$1
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

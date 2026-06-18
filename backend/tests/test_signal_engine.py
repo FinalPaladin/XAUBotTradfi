@@ -192,6 +192,8 @@ def test_bullish_h1_blocks_short_filter() -> None:
         -0.65,
         MainTrend.BULLISH,
         entry_threshold=0.65,
+        scalp_threshold=SCALP_ENTRY_THRESHOLD,
+        super_safe=False,
     )
     assert net == int(NetSignal.HOLD)
     assert scalp is False
@@ -204,6 +206,8 @@ def test_filter_entry_signal_neutral_threshold() -> None:
         SCALP_ENTRY_THRESHOLD - 0.01,
         MainTrend.NEUTRAL,
         entry_threshold=0.65,
+        scalp_threshold=SCALP_ENTRY_THRESHOLD,
+        super_safe=False,
     )
     assert net == int(NetSignal.HOLD)
     assert "BLOCKED" in log
@@ -213,6 +217,8 @@ def test_filter_entry_signal_neutral_threshold() -> None:
         SCALP_ENTRY_THRESHOLD,
         MainTrend.NEUTRAL,
         entry_threshold=0.65,
+        scalp_threshold=SCALP_ENTRY_THRESHOLD,
+        super_safe=False,
     )
     assert net == int(NetSignal.BUY)
     assert scalp is True

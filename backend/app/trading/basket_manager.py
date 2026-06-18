@@ -12,8 +12,16 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from app.models import BotConfig, OrderSide, TradePosition
-from app.trading.risk import resolve_basket_tp_min, resolve_single_tp_min
+from app.trading.risk import resolve_single_tp_min
 from app.trading.signal_engine import SCALP_ENTRY_THRESHOLD, MainTrend
+from app.trading.trading_mode import (
+    effective_basket_tp_usd,
+    effective_counter_trend_max_layers,
+    effective_full_stack_layer_count,
+    effective_full_stack_loss_pct,
+    effective_layer_spacing_min,
+    effective_max_layers as mode_max_layers,
+)
 from app.trading.types import AggregatedSignal, BasketAction, BasketDecision, NetSignal
 
 # Exit / DCA guard constants (P2)
@@ -225,9 +233,9 @@ def effective_max_layers(
     basket: PositionBasket,
     ctx: BasketContext,
 ) -> int:
-    """P1: counter-trend / scalp baskets capped at counter_trend_max_layers."""
-    base = getattr(config, "max_layers", None) or config.max_open_positions
-    counter_cap = getattr(config, "counter_trend_max_layers", 1) or 1
+    """Mode cap + counter-trend / scalp baskets capped further."""
+    base = mode_max_layers(config)
+    counter_cap = effective_counter_trend_max_layers(config)
     if is_basket_counter_trend(basket, ctx.main_trend) or ctx.is_scalp_mode:
         return min(base, counter_cap)
     return base
@@ -329,21 +337,43 @@ def resolve_max_basket_loss_usd(
 # ---------------------------------------------------------------------------
 
 
+def check_basket_profit_target(
+    config: BotConfig,
+    basket: PositionBasket,
+    current_price: float,
+) -> bool:
+    """Joint close khi tổng P&L basket ≥ target (~$1 NORMAL, ~$0.5 SUPER_SAFE)."""
+    net_pnl = calculate_net_pnl_usd(basket, current_price)
+    return net_pnl >= effective_basket_tp_usd(config)
+
+
+def check_dca_full_stack_loss(
+    config: BotConfig,
+    basket: PositionBasket,
+    current_price: float,
+    account_balance: float | None = None,
+) -> bool:
+    """Đủ lớp DCA (4 NORMAL / 2 SUPER_SAFE) và tổng lỗ ≥ % balance."""
+    required = effective_full_stack_layer_count(config)
+    if basket.layer_count < required:
+        return False
+    net_pnl = calculate_net_pnl_usd(basket, current_price)
+    if net_pnl >= 0:
+        return False
+    balance = account_balance or config.base_equity_usd or 200.0
+    limit_pct = effective_full_stack_loss_pct(config)
+    return net_pnl <= -(balance * limit_pct / 100.0)
+
+
 def check_joint_take_profit(
     config: BotConfig,
     basket: PositionBasket,
     current_price: float,
     account_balance: float | None = None,
 ) -> bool:
-    """Joint TP khi basket multi-layer đạt ngưỡng USD."""
-    if not basket.is_multi_layer:
-        return False
-
-    net_pnl = calculate_net_pnl_usd(basket, current_price)
-    balance = account_balance or config.base_equity_usd or 200.0
-    tp_min = resolve_basket_tp_min(config, balance)
-
-    return net_pnl >= tp_min
+    """Alias — dùng check_basket_profit_target."""
+    _ = account_balance
+    return check_basket_profit_target(config, basket, current_price)
 
 
 def check_single_layer_scalp_tp(
@@ -352,23 +382,11 @@ def check_single_layer_scalp_tp(
     current_price: float,
     account_balance: float | None = None,
 ) -> bool:
-    """Take Profit lớp đơn (thuận xu thế, chưa DCA)."""
+    """Lớp đơn — cùng ngưỡng profit target."""
     if basket.layer_count != 1:
         return False
-
-    net_pnl = calculate_net_pnl_usd(basket, current_price)
-    balance = account_balance or config.base_equity_usd or 200.0
-    tp_min = resolve_single_tp_min(config, balance)
-
-    if net_pnl >= tp_min:
-        return True
-
-    layer = basket.layers[0]
-    scalp_dist = config.single_tp_distance or 1.2
-
-    if layer.side == OrderSide.BUY:
-        return current_price >= layer.entry_price + scalp_dist
-    return current_price <= layer.entry_price - scalp_dist
+    _ = account_balance
+    return check_basket_profit_target(config, basket, current_price)
 
 
 def check_hard_stop_loss(
@@ -535,13 +553,10 @@ def should_add_dca_layer(
     max_layers = (
         effective_max_layers(config, basket, ctx)
         if ctx
-        else getattr(config, "max_layers", None) or config.max_open_positions
+        else mode_max_layers(config)
     )
 
     if basket.layer_count >= max_layers:
-        return False
-
-    if check_hard_stop_loss(config, basket, current_price):
         return False
 
     if net_pnl_usd is not None:
@@ -550,7 +565,7 @@ def should_add_dca_layer(
             return False
 
     spacing = calculate_layer_spacing_distance(basket, current_price)
-    spacing_min = getattr(config, "layer_spacing_min", 6.0) or 6.0
+    spacing_min = effective_layer_spacing_min(config)
 
     if spacing < spacing_min:
         return False
@@ -569,18 +584,13 @@ def evaluate_basket(
     basket_peak_pnl: float | None = None,
 ) -> BasketDecision:
     """
-    Đánh giá basket tổng hợp — thay thế evaluate_position per-ticket khi DCA.
+    Đánh giá basket — chỉ còn 2 rule thoát theo chiến lược DCA-4:
 
-    Thứ tự ưu tiên (P0–P2):
-    1. Trend flip exit
-    2. Panic signal exit (M5 score ngược chiều >= 0.8)
-    3. M5 reversal exit
-    4. Max USD loss cap
-    5. ATR stop
-    6. Time stop
-    7. Hard stop
-    8. Joint TP / Single scalp TP
-    9. HOLD
+    1. DCA full-stack loss (40% balance, đủ 4 lớp, đang lỗ)
+    2. Basket profit target (~$1)
+
+    Các rule cắt sớm (M5_REVERSAL, PANIC, TIME_STOP, TRAIL, MAX_AGE,
+    TREND_FLIP, ATR_STOP, HARD_STOP) đã tắt — để DCA gồng đủ spacing.
     """
     _ = signal
     if ctx is None:
@@ -599,90 +609,18 @@ def evaluate_basket(
         "basket_age_min": round(basket_age_minutes(basket), 1),
     }
 
-    if check_trend_flip_exit(basket, ctx, adverse):
+    if check_dca_full_stack_loss(config, basket, current_price, account_balance):
+        meta["full_stack_loss_pct"] = effective_full_stack_loss_pct(config)
         return BasketDecision(
-            BasketAction.CLOSE_TREND_FLIP,
-            close_reason="TREND_FLIP",
+            BasketAction.CLOSE_DCA_FULL_STACK_LOSS,
+            close_reason="DCA_FULL_STACK_LOSS",
             meta=meta,
         )
 
-    if check_max_basket_age(config, basket):
-        return BasketDecision(
-            BasketAction.CLOSE_MAX_AGE,
-            close_reason="MAX_BASKET_AGE",
-            meta=meta,
-        )
-
-    if check_panic_signal_exit(basket, ctx):
-        meta["entry_score"] = round(ctx.entry_score, 4)
-        return BasketDecision(
-            BasketAction.CLOSE_PANIC_SIGNAL,
-            close_reason="PANIC_SIGNAL",
-            meta=meta,
-        )
-
-    if check_m5_reversal_exit(basket, ctx, net_pnl):
-        return BasketDecision(
-            BasketAction.CLOSE_M5_REVERSAL,
-            close_reason="M5_REVERSAL",
-            meta=meta,
-        )
-
-    if check_max_basket_loss(config, basket, current_price, account_balance):
-        pct = getattr(config, "max_basket_loss_pct", None)
-        reason = (
-            BasketAction.CLOSE_MAX_PCT_LOSS
-            if pct is not None and pct > 0
-            else BasketAction.CLOSE_MAX_USD_LOSS
-        )
-        return BasketDecision(
-            reason,
-            close_reason="MAX_BASKET_LOSS",
-            meta=meta,
-        )
-
-    if basket_peak_pnl is not None and check_basket_pnl_trail(
-        config, basket, current_price, basket_peak_pnl
-    ):
-        meta["basket_peak_pnl"] = round(basket_peak_pnl, 2)
-        return BasketDecision(
-            BasketAction.CLOSE_BASKET_TRAIL,
-            close_reason="BASKET_PNL_TRAIL",
-            meta=meta,
-        )
-
-    if check_atr_stop(config, basket, current_price, ctx.atr_value):
-        return BasketDecision(
-            BasketAction.CLOSE_ATR_STOP,
-            close_reason="ATR_STOP",
-            meta=meta,
-        )
-
-    if check_time_stop(config, basket, adverse, net_pnl):
-        return BasketDecision(
-            BasketAction.CLOSE_TIME_STOP,
-            close_reason="TIME_STOP",
-            meta=meta,
-        )
-
-    if check_hard_stop_loss(config, basket, current_price):
-        return BasketDecision(
-            BasketAction.CLOSE_HARD_STOP,
-            close_reason="HARD_STOP",
-            meta=meta,
-        )
-
-    if check_joint_take_profit(config, basket, current_price, account_balance):
+    if check_basket_profit_target(config, basket, current_price):
         return BasketDecision(
             BasketAction.CLOSE_BASKET_TP,
             close_reason="BASKET_TP",
-            meta=meta,
-        )
-
-    if check_single_layer_scalp_tp(config, basket, current_price, account_balance):
-        return BasketDecision(
-            BasketAction.CLOSE_SINGLE_SCALP,
-            close_reason="SCALP_TP",
             meta=meta,
         )
 

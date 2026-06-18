@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models import BotStatus, LogLevel, OrderSide
+from app.models import BotStatus, LogLevel, OrderSide, TradingMode
 
 
 class ORMBase(BaseModel):
@@ -16,6 +16,7 @@ class BotConfigRead(ORMBase):
     id: int
     name: str
     status: BotStatus
+    trading_mode: TradingMode
     symbol: str
     timeframe: str
     bars_lookback: int
@@ -67,6 +68,7 @@ class BotConfigUpdate(BaseModel):
     id: int | None = None
     name: str | None = None
     status: BotStatus | None = None
+    trading_mode: TradingMode | None = None
     symbol: str | None = None
     timeframe: str | None = None
     bars_lookback: int | None = Field(None, ge=50, le=5000)

@@ -14,6 +14,11 @@ from enum import Enum
 from app.models import BotConfig
 from app.trading.aggregator import aggregate_signal, atr_volatility_factor
 from app.trading.market_data import MarketDataProvider
+from app.trading.trading_mode import (
+    effective_scalp_entry_threshold,
+    effective_signal_threshold,
+    is_super_safe,
+)
 from app.trading.types import AggregatedSignal, NetSignal, StrategyResult
 
 ENTRY_TIMEFRAME = "M5"
@@ -76,13 +81,16 @@ def _filter_entry_signal(
     main_trend: MainTrend,
     *,
     entry_threshold: float,
+    scalp_threshold: float,
+    super_safe: bool,
 ) -> tuple[int, bool, str]:
     """
     Lọc tín hiệu M5 theo xu hướng H1.
 
     - H1 BULLISH: chỉ LONG (chặn SHORT ngược trend).
     - H1 BEARISH: chỉ SHORT (chặn LONG ngược trend).
-    - H1 NEUTRAL: scalp mode khi điểm M5 cực cao (>= 0.8 / <= -0.8).
+    - H1 NEUTRAL: scalp mode khi điểm M5 cực cao (>= scalp_threshold).
+    - SUPER_SAFE: không vào khi H1 NEUTRAL (chỉ thuận trend + ngưỡng cao).
     """
     if main_trend == MainTrend.BULLISH:
         if entry_net == int(NetSignal.BUY):
@@ -106,20 +114,26 @@ def _filter_entry_signal(
             f"-> BLOCKED LONG (trend-only mode)"
         )
 
-    if entry_score >= SCALP_ENTRY_THRESHOLD:
+    if super_safe:
+        return int(NetSignal.HOLD), False, (
+            f"H1 NEUTRAL | M5 Score: {entry_score:+.2f} "
+            f"-> BLOCKED (SUPER_SAFE — chỉ thuận H1 trend)"
+        )
+
+    if entry_score >= scalp_threshold:
         return int(NetSignal.BUY), True, (
             f"H1 NEUTRAL | M5 Score: {entry_score:+.2f} "
             f"-> OVERRIDE: Allowed LONG (SCALP MODE - 50% Volume)"
         )
-    if entry_score <= -SCALP_ENTRY_THRESHOLD:
+    if entry_score <= -scalp_threshold:
         return int(NetSignal.SELL), True, (
             f"H1 NEUTRAL | M5 Score: {entry_score:+.2f} "
             f"-> OVERRIDE: Allowed SHORT (SCALP MODE - 50% Volume)"
         )
     return int(NetSignal.HOLD), False, (
         f"H1 NEUTRAL | M5 Score: {entry_score:+.2f} "
-        f"-> BLOCKED (need >= +{SCALP_ENTRY_THRESHOLD} LONG / "
-        f"<= -{SCALP_ENTRY_THRESHOLD} SHORT)"
+        f"-> BLOCKED (need >= +{scalp_threshold} LONG / "
+        f"<= -{scalp_threshold} SHORT)"
     )
 
 
@@ -154,7 +168,9 @@ def check_trend_and_entry_signal(
         entry_signal.net_signal,
         entry_signal.weighted_score,
         main_trend,
-        entry_threshold=config.signal_threshold,
+        entry_threshold=effective_signal_threshold(config),
+        scalp_threshold=effective_scalp_entry_threshold(config),
+        super_safe=is_super_safe(config),
     )
 
     meta = {

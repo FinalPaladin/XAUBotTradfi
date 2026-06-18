@@ -122,18 +122,19 @@ def test_daily_profit_lock_blocks_new_entries(db, guard_config) -> None:
         )
     )
     db.commit()
-    status = evaluate_daily_guard(db, guard_config.id, [], 4300.0)
+    status = evaluate_daily_guard(db, guard_config.id, [], 4300.0, 200.0)
     assert status.block_new_entries is True
-    assert status.stop_bot is False
+    assert status.trigger_dca_full_stack_loss is False
     assert "PROFIT_LOCK" in (status.reason or "")
 
 
-def test_daily_loss_cap_stops_bot(db, guard_config) -> None:
+def test_daily_loss_cap_triggers_at_40pct_balance(db, guard_config) -> None:
+    """Daily loss cap = 40% balance — không còn cắt sớm ở -15 USD."""
     now = datetime.now(timezone.utc)
     db.add(
         TradeHistory(
             bot_id=guard_config.id,
-            ticket_id="loss1",
+            ticket_id="smallloss",
             side=OrderSide.BUY,
             volume=0.01,
             entry_price=4300.0,
@@ -144,9 +145,32 @@ def test_daily_loss_cap_stops_bot(db, guard_config) -> None:
         )
     )
     db.commit()
-    status = evaluate_daily_guard(db, guard_config.id, [], 4300.0)
-    assert status.stop_bot is True
-    assert status.block_new_entries is True
+    status_small = evaluate_daily_guard(
+        db, guard_config.id, [], 4300.0, account_balance=100.0
+    )
+    assert status_small.trigger_dca_full_stack_loss is False
+    assert status_small.block_new_entries is False
+
+    db.add(
+        TradeHistory(
+            bot_id=guard_config.id,
+            ticket_id="bigloss",
+            side=OrderSide.BUY,
+            volume=0.01,
+            entry_price=4300.0,
+            exit_price=4250.0,
+            profit_loss=-25.0,
+            opened_at=now - timedelta(hours=1),
+            closed_at=now - timedelta(minutes=30),
+        )
+    )
+    db.commit()
+    status_hit = evaluate_daily_guard(
+        db, guard_config.id, [], 4300.0, account_balance=100.0
+    )
+    assert status_hit.trigger_dca_full_stack_loss is True
+    assert "DCA_FULL_STACK_LOSS" in (status_hit.reason or "")
+    assert status_hit.block_new_entries is False
 
 
 def test_max_basket_age_forces_close(guard_config: BotConfig) -> None:
@@ -218,7 +242,8 @@ def test_basket_pnl_trail_ignores_highest_price_entry_collision(
     assert not check_basket_pnl_trail(guard_config, basket, 4315.0, peak_pnl_usd=peak)
 
 
-def test_evaluate_basket_max_age_priority(guard_config: BotConfig) -> None:
+def test_evaluate_basket_max_age_disabled(guard_config: BotConfig) -> None:
+    """MAX_BASKET_AGE tắt — basket già vẫn HOLD nếu chưa đủ rule DCA."""
     old = datetime.now(timezone.utc) - timedelta(hours=6)
     basket = PositionBasket(
         side=OrderSide.BUY,
@@ -240,4 +265,4 @@ def test_evaluate_basket_max_age_priority(guard_config: BotConfig) -> None:
         4305.0,
         AggregatedSignal([], 0.0, int(NetSignal.HOLD)),
     )
-    assert decision.action == BasketAction.CLOSE_MAX_AGE
+    assert decision.action != BasketAction.CLOSE_MAX_AGE
