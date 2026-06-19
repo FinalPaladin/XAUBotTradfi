@@ -10,7 +10,16 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import BotConfig, BotStatus, LogLevel, OrderSide, SystemLog, TradeHistory, TradePosition
+from app.models import (
+    BotConfig,
+    BotStatus,
+    LogLevel,
+    OrderSide,
+    SystemLog,
+    TradeHistory,
+    TradePosition,
+    TradingMode,
+)
 from app.schemas import AggregatedSignalRead, BotConfigUpdate, StrategyResultRead
 from app.services.logging_service import log_message
 from app.services.mt5_client import check_mt5_status, get_mt5_client
@@ -67,8 +76,25 @@ class BotService:
             self.db.add(bot)
 
         data = payload.model_dump(exclude_unset=True, exclude={"id"})
+        prev_mode = bot.trading_mode
+
+        if "trading_mode" in data:
+            if data["trading_mode"] == TradingMode.NORMAL:
+                bot.trading_mode_manual = True
+            elif data["trading_mode"] == TradingMode.SUPER_SAFE:
+                bot.trading_mode_manual = False
+
         for key, value in data.items():
             setattr(bot, key, value)
+
+        if "trading_mode" in data and prev_mode != bot.trading_mode:
+            log_message(
+                self.db,
+                f"Chế độ giao dịch: {prev_mode.value} → {bot.trading_mode.value}"
+                + (" (chọn thủ công)" if bot.trading_mode_manual else ""),
+                bot_id=bot.id,
+                source="api",
+            )
 
         validate_weights(
             bot.donchian_weight,

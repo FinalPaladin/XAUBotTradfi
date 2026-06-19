@@ -104,6 +104,7 @@ def close_all_and_enter_super_safe(
     cancelled = mt5.cancel_pending_orders(bot.symbol, bot.magic_number)
 
     bot.trading_mode = TradingMode.SUPER_SAFE
+    bot.trading_mode_manual = False
     db.flush()
 
     logger.warning(

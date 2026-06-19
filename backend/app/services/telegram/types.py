@@ -23,6 +23,7 @@ class OpenTradeAlert:
     entry: float
     sl: float | None
     tp: float | None
+    ticket_id: str
     reason: str
 
 
@@ -35,4 +36,6 @@ class CloseTradeAlert:
     pnl_percent: float
     entry: float
     close_price: float
+    ticket_id: str
+    account_balance: float | None
     reason: str

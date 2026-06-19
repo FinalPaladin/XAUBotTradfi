@@ -14,6 +14,7 @@ from app.services.telegram.types import (
     TradeDirection,
     TradeOutcome,
 )
+from app.trading.risk import resolve_account_balance
 from app.trading.types import OrderPlan
 
 if TYPE_CHECKING:
@@ -109,6 +110,7 @@ def _price_pnl_percent(side: OrderSide, entry: float, exit_px: float) -> float:
 
 def history_to_close_alert(history: TradeHistory) -> CloseTradeAlert:
     pnl = float(history.profit_loss)
+    balance = resolve_account_balance()
     return CloseTradeAlert(
         symbol=history.symbol,
         direction=order_side_to_direction(history.side),
@@ -119,6 +121,8 @@ def history_to_close_alert(history: TradeHistory) -> CloseTradeAlert:
         ),
         entry=history.entry_price,
         close_price=history.exit_price,
+        ticket_id=history.ticket_id,
+        account_balance=balance if balance > 0 else None,
         reason=humanize_close_reason(history.close_reason),
     )
 
@@ -136,6 +140,7 @@ def plan_and_position_to_open_alert(
         entry=position.entry_price,
         sl=position.current_sl,
         tp=position.current_tp,
+        ticket_id=position.ticket_id,
         reason=build_entry_reason(trend_signal, extra=extra),
     )
 

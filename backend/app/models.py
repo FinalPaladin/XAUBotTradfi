@@ -59,6 +59,10 @@ class BotConfig(Base):
         default=TradingMode.NORMAL,
         nullable=False,
     )
+    # True when user explicitly chose NORMAL — skip auto daily profit lock re-switch.
+    trading_mode_manual: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
 
     symbol: Mapped[str] = mapped_column(String(32), default="XAUUSD+", nullable=False)
     timeframe: Mapped[str] = mapped_column(String(8), default="M5", nullable=False)

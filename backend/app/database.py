@@ -214,6 +214,54 @@ def _migrate_risk_tuning() -> None:
             )
 
 
+def _migrate_fix_atr_stop_multiplier() -> None:
+    """Fix invalid atr_stop_multiplier values (e.g. 50 mistaken for leverage)."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if "bot_config" not in insp.get_table_names():
+        return
+
+    existing = {c["name"] for c in insp.get_columns("bot_config")}
+    if "atr_stop_multiplier" not in existing:
+        return
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE bot_config SET atr_stop_multiplier = 2.0 "
+                "WHERE atr_stop_multiplier > 10 OR atr_stop_multiplier < 0.5"
+            )
+        )
+
+
+def _migrate_trading_mode_manual() -> None:
+    """Allow user to stay on NORMAL after manual override."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if "bot_config" not in insp.get_table_names():
+        return
+
+    existing = {c["name"] for c in insp.get_columns("bot_config")}
+    if "trading_mode_manual" not in existing:
+        with engine.begin() as conn:
+            if engine.dialect.name == "mysql":
+                conn.execute(
+                    text(
+                        "ALTER TABLE bot_config ADD COLUMN trading_mode_manual "
+                        "BOOLEAN NOT NULL DEFAULT 0"
+                    )
+                )
+            else:
+                conn.execute(
+                    text(
+                        "ALTER TABLE bot_config ADD COLUMN trading_mode_manual "
+                        "BOOLEAN NOT NULL DEFAULT 0"
+                    )
+                )
+
+
 def _migrate_trading_mode_and_dca_v4() -> None:
     """Add trading_mode column + DCA-4 defaults."""
     from sqlalchemy import inspect, text
@@ -390,6 +438,8 @@ def init_db() -> None:
     _migrate_trade_history_dedupe()
     _migrate_dca_strategy_v2()
     _migrate_trading_mode_and_dca_v4()
+    _migrate_fix_atr_stop_multiplier()
+    _migrate_trading_mode_manual()
     _migrate_fix_history_opened_at_shift()
     with SessionLocal() as db:
         if seed_if_empty(db):

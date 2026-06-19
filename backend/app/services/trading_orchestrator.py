@@ -157,7 +157,7 @@ class TradingOrchestrator:
             daily_guard = evaluate_daily_guard(
                 self.db, bot.id, open_positions, price, account_balance
             )
-            if daily_guard.switch_to_super_safe:
+            if daily_guard.switch_to_super_safe and not bot.trading_mode_manual:
                 if bot.trading_mode != TradingMode.SUPER_SAFE:
                     bot.trading_mode = TradingMode.SUPER_SAFE
                     log_message(

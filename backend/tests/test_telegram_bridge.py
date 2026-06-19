@@ -40,4 +40,5 @@ def test_history_to_close_alert_win() -> None:
     assert alert.outcome == TradeOutcome.WIN
     assert alert.pnl_amount == 25.0
     assert alert.pnl_percent > 0
+    assert alert.ticket_id == "123"
     assert alert.reason == "Chạm Basket TP"

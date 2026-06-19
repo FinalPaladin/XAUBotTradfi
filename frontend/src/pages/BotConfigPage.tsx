@@ -34,13 +34,47 @@ const TRADING_MODES: {
   },
 ];
 
+function sanitizeConfig(config: BotConfig): BotConfig {
+  const atr = config.atr_stop_multiplier;
+  return {
+    ...config,
+    atr_stop_multiplier:
+      atr > 10 || atr < 0.5 ? 2.0 : atr,
+  };
+}
+
+function formatSaveError(raw: string): string {
+  try {
+    const parsed = JSON.parse(raw) as {
+      detail?: string | Array<{ loc?: string[]; msg?: string }>;
+    };
+    if (Array.isArray(parsed.detail)) {
+      return parsed.detail
+        .map((d) => {
+          const field = d.loc?.slice(-1)[0] ?? "field";
+          return `${field}: ${d.msg ?? "invalid"}`;
+        })
+        .join("; ");
+    }
+    if (typeof parsed.detail === "string") {
+      return parsed.detail;
+    }
+  } catch {
+    /* keep raw message */
+  }
+  return raw;
+}
+
 export function BotConfigPage() {
   const [bot, setBot] = useState<BotConfig | null>(null);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
 
   useEffect(() => {
-    api.getConfigs().then((list) => setBot(list[0] ?? null));
+    api.getConfigs().then((list) => {
+      const config = list[0];
+      setBot(config ? sanitizeConfig(config) : null);
+    });
   }, []);
 
   function updateField<K extends keyof BotConfig>(key: K, value: BotConfig[K]) {
@@ -53,12 +87,13 @@ export function BotConfigPage() {
     setSaving(true);
     setMessage("");
     try {
-      const { id, created_at, updated_at, ...payload } = bot;
+      const { id, created_at, updated_at, ...payload } = sanitizeConfig(bot);
       const saved = await api.updateConfig({ ...payload, id });
       setBot(saved);
       setMessage("Đã lưu cấu hình");
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : "Lỗi lưu");
+      const raw = e instanceof Error ? e.message : "Lỗi lưu";
+      setMessage(formatSaveError(raw));
     } finally {
       setSaving(false);
     }
