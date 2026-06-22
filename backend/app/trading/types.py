@@ -61,6 +61,7 @@ class AggregatedSignal:
     weighted_score: float
     net_signal: int
     is_scalp_mode: bool = False
+    scoring_meta: dict = field(default_factory=dict)
 
 
 @dataclass

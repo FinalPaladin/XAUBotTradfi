@@ -182,7 +182,12 @@ def check_trend_and_entry_signal(
 
     df_entry = provider.fetch_timeframe(config.symbol, ENTRY_TIMEFRAME, lookback)
     atr_factor, atr_meta = atr_volatility_factor(df_entry)
-    entry_signal = aggregate_signal(df_entry, config, apply_atr_filter=True)
+    entry_signal = aggregate_signal(
+        df_entry,
+        config,
+        apply_atr_filter=True,
+        h1_trend=main_trend.value,
+    )
 
     final_net, is_scalp_mode, filter_log = _filter_entry_signal(
         entry_signal.net_signal,
@@ -202,6 +207,7 @@ def check_trend_and_entry_signal(
         "filter_log": filter_log,
         "atr_factor": atr_factor,
         "atr": atr_meta,
+        "entry_scoring": entry_signal.scoring_meta,
     }
 
     return TrendEntrySignal(

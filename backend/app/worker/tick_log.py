@@ -40,6 +40,9 @@ def format_tick_log(result: dict) -> str:
         f"  formula: {s['formula']}",
     ]
 
+    for line in s.get("entry_scoring_monitor") or []:
+        lines.append(line)
+
     filter_log = s.get("filter_log")
     if filter_log:
         lines.append(f"  filter: {filter_log}")

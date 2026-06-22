@@ -66,6 +66,8 @@ def _build_tick_summary(
         trend_signal.strategy_results,
         include_rsi=True,
         atr_factor=meta.get("atr_factor", 1.0),
+        entry_scoring=meta.get("entry_scoring"),
+        weighted_score=trend_signal.entry_score,
     )
     return {
         "bot_id": bot.id,
@@ -93,6 +95,7 @@ def _build_tick_summary(
         "ema21": entry_bd["ema21"],
         "atr_factor": entry_bd["atr_factor"],
         "formula": entry_bd["formula"],
+        "entry_scoring_monitor": entry_bd.get("entry_scoring_monitor", []),
         "action": action,
     }
 

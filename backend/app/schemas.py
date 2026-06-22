@@ -39,6 +39,7 @@ class BotConfigRead(ORMBase):
     rsi_weight: float
     ema_period: int
     ema_weight: float
+    ema_distance_threshold: float = 0.4
     signal_threshold: float
     max_layers: int = 5
     isolated_leverage: int = 50
@@ -109,6 +110,7 @@ class BotConfigUpdate(BaseModel):
     rsi_weight: float | None = Field(None, ge=0, le=1)
     ema_period: int | None = Field(None, ge=1)
     ema_weight: float | None = Field(None, ge=0, le=1)
+    ema_distance_threshold: float | None = Field(None, ge=0.05, le=5.0)
     signal_threshold: float | None = Field(None, ge=0, le=1)
 
 

@@ -12,7 +12,12 @@ import pytest
 
 from app.models import BotConfig, BotStatus
 
-from app.trading.aggregator import aggregate_signal, normalize_score
+from app.trading.aggregator import (
+    aggregate_signal,
+    compute_m5_entry_score,
+    normalize_score,
+)
+from app.trading.types import StrategyResult
 
 
 
@@ -97,6 +102,8 @@ def bot_config() -> BotConfig:
         ema_period=21,
 
         ema_weight=0.15,
+
+        ema_distance_threshold=0.4,
 
         rsi_swing_lookback=5,
 
@@ -280,4 +287,81 @@ def test_atr_filter_halves_score(
 
     assert result.net_signal == 1
 
+
+def _mock_entry_results(
+    *,
+    donchian: float = 1.0,
+    supertrend: float = 1.0,
+    rsi: float = 1.0,
+    ema: float = 1.0,
+    raw_rsi: float | None = 60.0,
+    close: float = 2400.0,
+    ema_val: float = 2395.0,
+) -> list[StrategyResult]:
+    return [
+        StrategyResult("donchian", donchian, {}),
+        StrategyResult("supertrend", supertrend, {}),
+        StrategyResult("rsi", rsi, {"rsi": raw_rsi, "period": 14, "mode": "midline"}),
+        StrategyResult(
+            "ema21",
+            ema,
+            {"close": close, "ema": ema_val, "period": 21, "mode": "above"},
+        ),
+    ]
+
+
+def test_rsi_veto_blocks_long_exhaustion(bot_config: BotConfig) -> None:
+    results = _mock_entry_results(raw_rsi=76.0)
+    score, meta = compute_m5_entry_score(
+        bot_config, results, h1_trend="BULLISH"
+    )
+    assert score == 0.0
+    assert meta["rsi_veto"] is True
+    assert meta["block_reason"] == "rsi_exhaustion_long"
+
+
+def test_rsi_veto_blocks_short_exhaustion(bot_config: BotConfig) -> None:
+    results = _mock_entry_results(raw_rsi=24.0, ema=-1.0)
+    score, meta = compute_m5_entry_score(
+        bot_config, results, h1_trend="BEARISH"
+    )
+    assert score == 0.0
+    assert meta["rsi_veto"] is True
+    assert meta["block_reason"] == "rsi_exhaustion_short"
+
+
+def test_ema_distance_penalty_reduces_score(bot_config: BotConfig) -> None:
+    bot_config.ema_distance_threshold = 0.4
+    results = _mock_entry_results(
+        raw_rsi=65.0,
+        close=2410.0,
+        ema_val=2400.0,
+    )
+    score, meta = compute_m5_entry_score(
+        bot_config, results, h1_trend="BULLISH"
+    )
+    assert meta["ema_distance_penalty"] is True
+    assert score == pytest.approx(1.0 * 0.2)
+
+
+def test_dynamic_rsi_sweet_spot_full_weight(bot_config: BotConfig) -> None:
+    results = _mock_entry_results(raw_rsi=65.0, close=2400.0, ema_val=2399.5)
+    score, meta = compute_m5_entry_score(
+        bot_config, results, h1_trend="BULLISH"
+    )
+    assert meta["rsi_score"] == pytest.approx(1.0)
+    assert score == pytest.approx(1.0)
+
+
+def test_dynamic_rsi_fades_above_70(bot_config: BotConfig) -> None:
+    results = _mock_entry_results(raw_rsi=72.0, close=2400.0, ema_val=2399.5)
+    score, meta = compute_m5_entry_score(
+        bot_config, results, h1_trend="BULLISH"
+    )
+    sweet_results = _mock_entry_results(raw_rsi=65.0, close=2400.0, ema_val=2399.5)
+    sweet_score, _ = compute_m5_entry_score(
+        bot_config, sweet_results, h1_trend="BULLISH"
+    )
+    assert meta["rsi_score"] < 0.3
+    assert score < sweet_score
 

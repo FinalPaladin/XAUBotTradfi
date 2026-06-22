@@ -112,6 +112,7 @@ def _migrate_bot_config_columns() -> None:
         ("basket_time_stop_minutes", "INT NOT NULL DEFAULT 60"),
         ("ema_period", "INT NOT NULL DEFAULT 21"),
         ("ema_weight", "FLOAT NOT NULL DEFAULT 0.15"),
+        ("ema_distance_threshold", "FLOAT NOT NULL DEFAULT 0.4"),
     ]
     for col, typedef in dca_columns:
         if col not in existing:

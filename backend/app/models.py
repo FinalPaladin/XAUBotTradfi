@@ -135,6 +135,9 @@ class BotConfig(Base):
     # EMA trend bias (entry M15)
     ema_period: Mapped[int] = mapped_column(Integer, default=21, nullable=False)
     ema_weight: Mapped[float] = mapped_column(Float, default=0.15, nullable=False)
+    ema_distance_threshold: Mapped[float] = mapped_column(
+        Float, default=0.4, nullable=False
+    )
 
     # Combined signal gate
     signal_threshold: Mapped[float] = mapped_column(Float, default=0.65, nullable=False)

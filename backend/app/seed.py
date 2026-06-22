@@ -51,6 +51,7 @@ def _default_xauusd_bot() -> BotConfig:
         rsi_weight=0.20,
         ema_period=21,
         ema_weight=0.15,
+        ema_distance_threshold=0.4,
         signal_threshold=0.65,
     )
 

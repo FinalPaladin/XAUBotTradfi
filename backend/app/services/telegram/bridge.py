@@ -15,6 +15,7 @@ from app.services.telegram.types import (
     TradeOutcome,
 )
 from app.trading.risk import resolve_account_balance
+from app.trading.signal_format import format_entry_scoring_monitor
 from app.trading.types import OrderPlan
 
 if TYPE_CHECKING:
@@ -92,6 +93,10 @@ def build_entry_reason(
     filter_log = trend_signal.meta.get("filter_log", "")
     if filter_log:
         lines.append(str(filter_log))
+    for monitor_line in format_entry_scoring_monitor(
+        trend_signal.meta.get("entry_scoring")
+    ):
+        lines.append(monitor_line.strip())
     confluence = _strategy_confluence(trend_signal)
     if confluence:
         lines.append(f"Confluence: {confluence}")
