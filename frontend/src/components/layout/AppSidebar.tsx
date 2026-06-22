@@ -4,13 +4,13 @@ import {
   History,
   LayoutDashboard,
   ListOrdered,
-  LogOut,
   Server,
+  Users,
 } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
-import { logout } from "@/lib/auth";
+import { useAuth } from "@/contexts/AuthContext";
 
 const navItems = [
   { to: "/", icon: LayoutDashboard, label: "Dashboard" },
@@ -22,6 +22,12 @@ const navItems = [
 ];
 
 export function AppSidebar() {
+  const { isAdminUser } = useAuth();
+
+  const items = isAdminUser
+    ? [...navItems, { to: "/admin/users", icon: Users, label: "Quản lý Account" }]
+    : navItems;
+
   return (
     <aside
       className="flex h-screen min-h-screen w-60 shrink-0 flex-col border-r border-sidebar-border bg-sidebar font-[Inter,sans-serif] text-white"
@@ -35,7 +41,7 @@ export function AppSidebar() {
       </div>
       <Separator className="bg-sidebar-border" />
       <nav className="flex-1 space-y-1 overflow-y-auto p-3">
-        {navItems.map(({ to, icon: Icon, label }) => (
+        {items.map(({ to, icon: Icon, label }) => (
           <NavLink
             key={to}
             to={to}
@@ -54,19 +60,6 @@ export function AppSidebar() {
           </NavLink>
         ))}
       </nav>
-      <div className="mt-auto border-t border-sidebar-border p-3">
-        <button
-          type="button"
-          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-white/90 transition-colors hover:bg-white/10 hover:text-white"
-          onClick={() => {
-            logout();
-            window.location.href = "/login";
-          }}
-        >
-          <LogOut className="h-4 w-4" />
-          Đăng xuất
-        </button>
-      </div>
     </aside>
   );
 }

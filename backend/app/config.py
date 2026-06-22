@@ -39,6 +39,19 @@ class Settings(BaseSettings):
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
 
+    # JWT authentication
+    jwt_secret_key: str = "change-me-in-production-use-long-random-string"
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 480
+
+    # X-Secure-Key (TOTP-like, shared with React via env)
+    secret_key_dynamic: str = "change-me-secure-key-dynamic"
+
+    # Bootstrap admin (created on first run when users table is empty)
+    admin_username: str = "admin"
+    admin_password: str = "123qwe"
+    admin_email: str = "admin@local"
+
     @field_validator("mt5_login", mode="before")
     @classmethod
     def empty_login(cls, v: object) -> object:

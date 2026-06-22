@@ -152,3 +152,57 @@ export interface MessageResponse {
 export type BotConfigUpdate = Partial<
   Omit<BotConfig, "id" | "created_at" | "updated_at">
 > & { id?: number };
+
+// --- Auth & user management ---
+
+export interface User {
+  id: number;
+  username: string;
+  email: string;
+  role: string;
+  permissions: string[];
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LoginRequest {
+  username: string;
+  password: string;
+}
+
+export interface TokenResponse {
+  access_token: string;
+  token_type: string;
+  user: User;
+}
+
+export interface ChangePasswordRequest {
+  old_password: string;
+  new_password: string;
+  confirm_password: string;
+}
+
+export interface AdminUserCreate {
+  username: string;
+  email: string;
+  password: string;
+  role: string;
+  permissions: string[];
+  is_active: boolean;
+}
+
+export interface AdminUserUpdate {
+  email?: string;
+  password?: string;
+  role?: string;
+  permissions?: string[];
+  is_active?: boolean;
+}
+
+export const ALL_PERMISSIONS = [
+  { id: "read:trades", label: "Xem giao dịch & dashboard" },
+  { id: "execute:trades", label: "Thực thi lệnh (start/stop/close)" },
+  { id: "manage:settings", label: "Quản lý cấu hình bot" },
+  { id: "admin", label: "Quản trị hệ thống" },
+] as const;

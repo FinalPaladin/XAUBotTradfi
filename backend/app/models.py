@@ -1,6 +1,7 @@
-"""SQLAlchemy ORM models for bot configuration, positions, history, and logs."""
+"""SQLAlchemy ORM models for bot configuration, positions, history, logs, and users."""
 
 import enum
+import json
 from datetime import datetime
 
 from sqlalchemy import (
@@ -17,7 +18,43 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.permissions import ADMIN_ROLE, parse_permissions
 from app.database import Base
+
+
+class User(Base):
+    """Application user accounts with role and fine-grained permissions."""
+
+    __tablename__ = "users"
+    __table_args__ = (Index("ix_users_username", "username", unique=True),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    username: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[str] = mapped_column(String(32), default=ADMIN_ROLE, nullable=False)
+    permissions_json: Mapped[str] = mapped_column(
+        Text, default="[]", nullable=False
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    @property
+    def permissions_list(self) -> list[str]:
+        return parse_permissions(self.permissions_json)
+
+    def set_permissions(self, permissions: list[str]) -> None:
+        self.permissions_json = json.dumps(parse_permissions(permissions))
 
 
 class BotStatus(str, enum.Enum):
@@ -59,7 +96,7 @@ class BotConfig(Base):
         default=TradingMode.NORMAL,
         nullable=False,
     )
-    # True when user explicitly chose NORMAL — skip auto daily profit lock re-switch.
+    # True when user explicitly chose NORMAL — skip auto guards re-switching to SUPER_SAFE.
     trading_mode_manual: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )
@@ -128,8 +165,8 @@ class BotConfig(Base):
 
     # RSI strategy
     rsi_period: Mapped[int] = mapped_column(Integer, default=14, nullable=False)
-    rsi_overbought: Mapped[float] = mapped_column(Float, default=70.0, nullable=False)
-    rsi_oversold: Mapped[float] = mapped_column(Float, default=30.0, nullable=False)
+    rsi_overbought: Mapped[float] = mapped_column(Float, default=80.0, nullable=False)
+    rsi_oversold: Mapped[float] = mapped_column(Float, default=20.0, nullable=False)
     rsi_weight: Mapped[float] = mapped_column(Float, default=0.20, nullable=False)
 
     # EMA trend bias (entry M15)

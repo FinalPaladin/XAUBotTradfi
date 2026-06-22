@@ -98,21 +98,30 @@ def close_all_and_enter_super_safe(
     db: Session,
     *,
     reason: str = "POSITION_LOSS_16U",
+    enter_super_safe: bool = True,
 ) -> int:
-    """Đóng toàn bộ vị thế, hủy pending, chuyển SUPER_SAFE (bot vẫn RUNNING)."""
+    """Đóng toàn bộ vị thế, hủy pending; tùy chọn chuyển SUPER_SAFE (bot vẫn RUNNING)."""
     closed = executor.close_all_for_bot(bot, reason=reason)
     cancelled = mt5.cancel_pending_orders(bot.symbol, bot.magic_number)
 
-    bot.trading_mode = TradingMode.SUPER_SAFE
-    bot.trading_mode_manual = False
-    db.flush()
-
-    logger.warning(
-        "Position loss guard bot=%s closed=%s cancelled=%s mode=SUPER_SAFE",
-        bot.id,
-        closed,
-        cancelled,
-    )
+    if enter_super_safe:
+        bot.trading_mode = TradingMode.SUPER_SAFE
+        bot.trading_mode_manual = False
+        db.flush()
+        logger.warning(
+            "Position loss guard bot=%s closed=%s cancelled=%s mode=SUPER_SAFE",
+            bot.id,
+            closed,
+            cancelled,
+        )
+    else:
+        logger.warning(
+            "Close-all bot=%s closed=%s cancelled=%s (giữ chế độ %s)",
+            bot.id,
+            closed,
+            cancelled,
+            bot.trading_mode.value,
+        )
     return closed
 
 

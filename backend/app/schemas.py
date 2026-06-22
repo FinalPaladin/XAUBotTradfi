@@ -45,7 +45,7 @@ class BotConfigRead(ORMBase):
     isolated_leverage: int = 50
     base_equity_usd: float = 200.0
     first_layer_notional_usd: float = 6750.0
-    dca_volume_multiplier: float = 1.35
+    dca_volume_multiplier: float = 1.0
     layer_spacing_min: float = 5.0
     layer_spacing_max: float = 7.0
     basket_tp_min_usd: float = 2.0
@@ -204,3 +204,67 @@ class ExchangeConfigRead(BaseModel):
     connected: bool = False
     error: str | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
+
+
+# --- Authentication & user management ---
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1)
+
+
+class UserRead(ORMBase):
+    id: int
+    username: str
+    email: str
+    role: str
+    permissions: list[str] = Field(default_factory=list)
+    is_active: bool
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def model_validate(cls, obj: Any, **kwargs: Any) -> "UserRead":
+        if hasattr(obj, "permissions_list"):
+            data = {
+                "id": obj.id,
+                "username": obj.username,
+                "email": obj.email,
+                "role": obj.role,
+                "permissions": obj.permissions_list,
+                "is_active": obj.is_active,
+                "created_at": obj.created_at,
+                "updated_at": obj.updated_at,
+            }
+            return cls(**data)
+        return super().model_validate(obj, **kwargs)
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserRead
+
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=6)
+    confirm_password: str = Field(min_length=6)
+
+
+class AdminUserCreate(BaseModel):
+    username: str = Field(min_length=2, max_length=64)
+    email: str = Field(min_length=3, max_length=255)
+    password: str = Field(min_length=6)
+    role: str = "User"
+    permissions: list[str] = Field(default_factory=list)
+    is_active: bool = True
+
+
+class AdminUserUpdate(BaseModel):
+    email: str | None = Field(default=None, min_length=3, max_length=255)
+    password: str | None = Field(default=None, min_length=6)
+    role: str | None = None
+    permissions: list[str] | None = None
+    is_active: bool | None = None

@@ -47,7 +47,7 @@ _CLOSE_REASON_LABELS: dict[str, str] = {
     "CLOSE_M5_REVERSAL": "M5 reversal",
     "CLOSE_MAX_USD_LOSS": "Vượt ngưỡng lỗ USD",
     "CLOSE_MAX_PCT_LOSS": "Vượt ngưỡng lỗ %",
-    "DCA_FULL_STACK_LOSS": "DCA full stack — daily loss cap",
+    "DCA_FULL_STACK_LOSS": "DCA full stack — đủ lớp, lỗ ≥ % balance",
     "CLOSE_ATR_STOP": "ATR stop",
     "CLOSE_TIME_STOP": "Time stop",
     "CLOSE_MAX_AGE": "Quá thời gian giữ lệnh",

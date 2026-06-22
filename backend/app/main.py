@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routers import bot
+from app.api.routers import admin, auth, bot
 from app.config import get_settings
 from app.database import init_db
 
@@ -32,6 +32,8 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    application.include_router(auth.router)
+    application.include_router(admin.router)
     application.include_router(bot.router)
     return application
 

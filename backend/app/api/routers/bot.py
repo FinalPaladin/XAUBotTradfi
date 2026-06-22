@@ -5,6 +5,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_permission, require_secure_key
 from app.database import get_db
 from app.models import BotStatus, LogLevel, OrderSide
 from app.schemas import (
@@ -19,16 +20,24 @@ from app.schemas import (
 )
 from app.services.bot_service import BotService
 
-router = APIRouter(prefix="/api/bot", tags=["bot"])
+router = APIRouter(
+    prefix="/api/bot",
+    tags=["bot"],
+    dependencies=[Depends(require_secure_key)],
+)
+
+_read = Depends(require_permission("read:trades"))
+_manage = Depends(require_permission("manage:settings"))
+_execute = Depends(require_permission("execute:trades"))
 
 
-@router.get("/config", response_model=list[BotConfigRead])
+@router.get("/config", response_model=list[BotConfigRead], dependencies=[_read])
 def get_bot_config(db: Session = Depends(get_db)) -> list[BotConfigRead]:
     """Lấy cấu hình tất cả bot."""
     return BotService(db).list_configs()
 
 
-@router.post("/config", response_model=BotConfigRead)
+@router.post("/config", response_model=BotConfigRead, dependencies=[_manage])
 def update_bot_config(
     payload: BotConfigUpdate,
     db: Session = Depends(get_db),
@@ -40,7 +49,7 @@ def update_bot_config(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/history", response_model=TradeHistoryPageRead)
+@router.get("/history", response_model=TradeHistoryPageRead, dependencies=[_read])
 def get_trade_history(
     days: int | None = Query(None, ge=1, le=365),
     since: datetime | None = Query(None),
@@ -63,7 +72,7 @@ def get_trade_history(
     )
 
 
-@router.get("/logs", response_model=list[SystemLogRead])
+@router.get("/logs", response_model=list[SystemLogRead], dependencies=[_read])
 def get_system_logs(
     level: LogLevel | None = None,
     limit: int = 200,
@@ -73,19 +82,19 @@ def get_system_logs(
     return BotService(db).list_logs(level=level, limit=min(limit, 1000))
 
 
-@router.get("/exchanges", response_model=list[ExchangeConfigRead])
+@router.get("/exchanges", response_model=list[ExchangeConfigRead], dependencies=[_read])
 def get_exchanges(db: Session = Depends(get_db)) -> list[ExchangeConfigRead]:
     """Thông tin sàn từ .env (phản hồi ngay, không gọi MT5)."""
     return BotService(db).list_exchanges(live=False)
 
 
-@router.get("/exchanges/check", response_model=list[ExchangeConfigRead])
+@router.get("/exchanges/check", response_model=list[ExchangeConfigRead], dependencies=[_read])
 def check_exchanges(db: Session = Depends(get_db)) -> list[ExchangeConfigRead]:
     """Kiểm tra kết nối MT5 thực tế (timeout ~8s)."""
     return BotService(db).list_exchanges(live=True)
 
 
-@router.get("/status", response_model=BotStatusResponse)
+@router.get("/status", response_model=BotStatusResponse, dependencies=[_read])
 def get_bot_status(db: Session = Depends(get_db)) -> BotStatusResponse:
     """Xem trạng thái bot, lệnh đang chạy và lịch sử gần đây."""
     service = BotService(db)
@@ -98,7 +107,7 @@ def get_bot_status(db: Session = Depends(get_db)) -> BotStatusResponse:
     )
 
 
-@router.get("/signals/{bot_id}", response_model=AggregatedSignalRead)
+@router.get("/signals/{bot_id}", response_model=AggregatedSignalRead, dependencies=[_read])
 def get_bot_signals(
     bot_id: int,
     db: Session = Depends(get_db),
@@ -112,7 +121,7 @@ def get_bot_signals(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
-@router.post("/history/resync-pnl", response_model=MessageResponse)
+@router.post("/history/resync-pnl", response_model=MessageResponse, dependencies=[_execute])
 def resync_history_pnl(db: Session = Depends(get_db)) -> MessageResponse:
     """Đồng bộ lại P&L lịch sử từ deal MT5 (khớp Exness)."""
     try:
@@ -125,7 +134,7 @@ def resync_history_pnl(db: Session = Depends(get_db)) -> MessageResponse:
     )
 
 
-@router.post("/positions/close-all", response_model=MessageResponse)
+@router.post("/positions/close-all", response_model=MessageResponse, dependencies=[_execute])
 def close_all_positions(db: Session = Depends(get_db)) -> MessageResponse:
     """Đóng tất cả lệnh đang mở tại giá market (bot vẫn RUNNING)."""
     try:
@@ -138,7 +147,7 @@ def close_all_positions(db: Session = Depends(get_db)) -> MessageResponse:
     )
 
 
-@router.post("/positions/{position_id}/close", response_model=MessageResponse)
+@router.post("/positions/{position_id}/close", response_model=MessageResponse, dependencies=[_execute])
 def close_single_position(
     position_id: int,
     db: Session = Depends(get_db),
@@ -156,7 +165,7 @@ def close_single_position(
     )
 
 
-@router.post("/{bot_id}/start", response_model=BotConfigRead)
+@router.post("/{bot_id}/start", response_model=BotConfigRead, dependencies=[_execute])
 def start_bot(bot_id: int, db: Session = Depends(get_db)) -> BotConfigRead:
     """Bật bot (worker sẽ xử lý khi status=RUNNING)."""
     try:
@@ -165,7 +174,7 @@ def start_bot(bot_id: int, db: Session = Depends(get_db)) -> BotConfigRead:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.post("/{bot_id}/stop", response_model=BotConfigRead)
+@router.post("/{bot_id}/stop", response_model=BotConfigRead, dependencies=[_execute])
 def stop_bot(bot_id: int, db: Session = Depends(get_db)) -> BotConfigRead:
     """Dừng bot (không đóng lệnh — dùng stop-all để đóng)."""
     try:
@@ -174,7 +183,7 @@ def stop_bot(bot_id: int, db: Session = Depends(get_db)) -> BotConfigRead:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.post("/stop-all", response_model=MessageResponse)
+@router.post("/stop-all", response_model=MessageResponse, dependencies=[_execute])
 def stop_all_bots(db: Session = Depends(get_db)) -> MessageResponse:
     """Khẩn cấp: dừng bot và đóng toàn bộ vị thế trên Bybit TradFi."""
     detail = BotService(db).stop_all()

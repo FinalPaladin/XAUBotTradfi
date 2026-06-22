@@ -23,6 +23,7 @@ from app.trading.basket_manager import (
     update_basket_peak_pnl,
 )
 from app.trading.daily_guard import evaluate_daily_guard
+from app.trading.trading_mode import effective_max_layers as mode_effective_max_layers
 from app.trading.drawdown_guard import (
     close_all_and_enter_super_safe,
     compute_total_floating_pnl,
@@ -160,57 +161,31 @@ class TradingOrchestrator:
             daily_guard = evaluate_daily_guard(
                 self.db, bot.id, open_positions, price, account_balance
             )
-            if daily_guard.switch_to_super_safe and not bot.trading_mode_manual:
+            if (
+                (daily_guard.switch_to_super_safe or daily_guard.trigger_dca_full_stack_loss)
+                and not bot.trading_mode_manual
+            ):
                 if bot.trading_mode != TradingMode.SUPER_SAFE:
+                    label = (
+                        "DAILY PROFIT LOCK"
+                        if daily_guard.switch_to_super_safe
+                        else "DAILY LOSS CAP"
+                    )
                     bot.trading_mode = TradingMode.SUPER_SAFE
                     log_message(
                         self.db,
-                        f"DAILY PROFIT LOCK: {daily_guard.reason}",
+                        f"{label}: {daily_guard.reason} (giữ lệnh mở)",
                         bot_id=bot.id,
-                        level=LogLevel.INFO,
+                        level=LogLevel.INFO if label == "DAILY PROFIT LOCK" else LogLevel.WARNING,
                         source="daily_guard",
                     )
                     self.db.flush()
                 elif daily_guard.reason:
                     logger.info(
-                        "bot_id=%s daily guard: %s (vẫn mở lệnh SUPER_SAFE)",
+                        "bot_id=%s daily guard: %s (vẫn SUPER_SAFE, giữ lệnh mở)",
                         bot.id,
                         daily_guard.reason,
                     )
-
-            if daily_guard.trigger_dca_full_stack_loss:
-                closed = close_all_and_enter_super_safe(
-                    bot,
-                    open_positions,
-                    self._executor,
-                    self._mt5,
-                    self.db,
-                    reason="DCA_FULL_STACK_LOSS",
-                )
-                log_message(
-                    self.db,
-                    f"DAILY LOSS CAP: {daily_guard.reason} closed={closed}",
-                    bot_id=bot.id,
-                    level=LogLevel.WARNING,
-                    source="daily_guard",
-                )
-                self.db.commit()
-                trend_signal = check_trend_and_entry_signal(bot, self._market)
-                return {
-                    "summary": _build_tick_summary(
-                        bot,
-                        price=price,
-                        open_count=0,
-                        account_balance=account_balance,
-                        drawdown_percent=0.0,
-                        floating_pnl=0.0,
-                        trend_signal=trend_signal,
-                        action=(
-                            f"DAILY LOSS 40% — đóng {closed} lệnh, "
-                            f"chuyển SUPER_SAFE"
-                        ),
-                    )
-                }
 
             trend_signal = check_trend_and_entry_signal(bot, self._market)
             signal = trend_signal.as_aggregated()
@@ -224,6 +199,10 @@ class TradingOrchestrator:
                 open_positions, account_balance, self._mt5, price
             )
 
+            # DCA multi-layer: thoát theo full-stack 40% balance (basket_manager),
+            # không cắt sớm theo lỗ từng lệnh 16U — tránh đóng trước lớp DCA 4.
+            use_position_loss_guard = mode_effective_max_layers(bot) <= 1
+
             def make_summary(action: str | None = None) -> dict:
                 return _build_tick_summary(
                     bot,
@@ -236,31 +215,42 @@ class TradingOrchestrator:
                     action=action,
                 )
 
-            if loss_guard.action == "CLOSE_ALL_SUPER_SAFE":
+            if use_position_loss_guard and loss_guard.action == "CLOSE_ALL_SUPER_SAFE":
+                enter_super_safe = not bot.trading_mode_manual
                 closed = close_all_and_enter_super_safe(
                     bot,
                     open_positions,
                     self._executor,
                     self._mt5,
                     self.db,
+                    enter_super_safe=enter_super_safe,
                 )
-                log_message(
-                    self.db,
-                    f"POSITION LOSS 16U: worst={loss_guard.worst_position_pnl} "
-                    f"closed={closed} → SUPER_SAFE",
-                    bot_id=bot.id,
-                    level=LogLevel.WARNING,
-                    source="position_loss_guard",
-                )
-                self.db.commit()
-                return {
-                    "summary": make_summary(
-                        action=(
-                            f"LOSS GUARD 16U — đóng {closed} lệnh, "
-                            f"chuyển SUPER_SAFE"
-                        )
+                if enter_super_safe:
+                    log_message(
+                        self.db,
+                        f"POSITION LOSS 16U: worst={loss_guard.worst_position_pnl} "
+                        f"closed={closed} → SUPER_SAFE",
+                        bot_id=bot.id,
+                        level=LogLevel.WARNING,
+                        source="position_loss_guard",
                     )
-                }
+                    action = (
+                        f"LOSS GUARD 16U — đóng {closed} lệnh, chuyển SUPER_SAFE"
+                    )
+                else:
+                    log_message(
+                        self.db,
+                        f"POSITION LOSS 16U (manual NORMAL): "
+                        f"worst={loss_guard.worst_position_pnl} closed={closed}",
+                        bot_id=bot.id,
+                        level=LogLevel.WARNING,
+                        source="position_loss_guard",
+                    )
+                    action = (
+                        f"LOSS GUARD 16U — đóng {closed} lệnh, giữ NORMAL"
+                    )
+                self.db.commit()
+                return {"summary": make_summary(action=action)}
 
             atr_meta = trend_signal.meta.get("atr") or {}
             atr_value = atr_meta.get("current_atr")

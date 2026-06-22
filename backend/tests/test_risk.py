@@ -59,6 +59,19 @@ def test_basket_tp_min_scales(config: BotConfig) -> None:
     assert resolve_basket_tp_min(config, 10_000) == 100.0
 
 
+def test_dca_multiplier_one_keeps_flat_volume(config: BotConfig) -> None:
+    config.dca_volume_multiplier = 1.0
+    for layer in range(4):
+        vol = calculate_layer_volume(config, 2400.0, layer, 500.0)
+        assert vol == pytest.approx(0.01)
+
+
+def test_dca_multiplier_scales_higher_layers(config: BotConfig) -> None:
+    config.dca_volume_multiplier = 1.35
+    assert calculate_layer_volume(config, 2400.0, 0, 500.0) == pytest.approx(0.01)
+    assert calculate_layer_volume(config, 2400.0, 2, 500.0) == pytest.approx(0.02)
+
+
 def test_scalp_mode_halves_volume(config: BotConfig) -> None:
     normal = calculate_layer_volume(config, 2400.0, 0, 10_000)
     scalp = calculate_layer_volume(config, 2400.0, 0, 10_000, is_scalp_mode=True)

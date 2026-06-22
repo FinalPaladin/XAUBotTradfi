@@ -167,8 +167,9 @@ export function BotConfigPage() {
         <CardHeader>
           <CardTitle>Chế độ giao dịch</CardTitle>
           <CardDescription>
-            Normal cho ngày thường; Siêu an toàn khi news hoặc sau daily loss /
-            loss guard 16U.
+            Normal cho ngày thường; Siêu an toàn khi news hoặc chạm daily profit /
+            loss cap (chỉ đổi chế độ, không đóng lệnh đang mở). Chọn chế độ rồi
+            bấm Lưu — Normal thủ công sẽ không bị tự chuyển lại Siêu an toàn.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2">
@@ -247,7 +248,7 @@ export function BotConfigPage() {
           {num("isolated_leverage", "Đòn bẩy isolated (x)", "1")}
           {num("base_equity_usd", "Vốn gốc tham chiếu (USD)")}
           {num("first_layer_notional_usd", "Notional lớp 1 (USD)")}
-          {num("dca_volume_multiplier", "Hệ số volume DCA (Martingale nén)", "0.01")}
+          {num("dca_volume_multiplier", "Hệ số volume DCA (1.0 = mọi lớp x1)", "0.01")}
           {num("layer_spacing_min", "Khoảng cách nhồi DCA min (giá Vàng)")}
           {num("layer_spacing_max", "Khoảng cách nhồi DCA max (giá Vàng)")}
           {num("basket_tp_min_usd", "Joint TP min — gồng DCA (USD)", "0.1")}
@@ -305,8 +306,8 @@ export function BotConfigPage() {
             {num("supertrend_multiplier", "SuperTrend mult")}
             {num("supertrend_weight", "SuperTrend weight", "0.01")}
             {num("rsi_period", "RSI period")}
-            {num("rsi_overbought", "RSI overbought")}
-            {num("rsi_oversold", "RSI oversold")}
+            {num("rsi_overbought", "RSI overbought (chặn LONG nếu M5 RSI > ngưỡng)")}
+            {num("rsi_oversold", "RSI oversold (chặn SHORT nếu M5 RSI < ngưỡng)")}
             {num("rsi_weight", "RSI weight", "0.01")}
             {num("ema_period", "EMA period")}
             {num("ema_weight", "EMA21 weight", "0.01")}

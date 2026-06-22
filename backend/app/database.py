@@ -431,7 +431,7 @@ def _migrate_fix_history_opened_at_shift() -> None:
 def init_db() -> None:
     """Create tables if missing and seed default bot config when empty."""
     from app import models  # noqa: F401 — register models with Base.metadata
-    from app.seed import seed_if_empty
+    from app.seed import seed_if_empty, seed_users_if_empty
 
     Base.metadata.create_all(bind=engine)
     _migrate_bot_config_columns()
@@ -443,5 +443,7 @@ def init_db() -> None:
     _migrate_trading_mode_manual()
     _migrate_fix_history_opened_at_shift()
     with SessionLocal() as db:
-        if seed_if_empty(db):
+        seeded_bot = seed_if_empty(db)
+        seeded_user = seed_users_if_empty(db)
+        if seeded_bot or seeded_user:
             db.commit()

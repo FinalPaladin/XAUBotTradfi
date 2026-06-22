@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Navigate, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -10,21 +10,40 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { login } from "@/lib/auth";
+import { useAuth } from "@/contexts/AuthContext";
+import { api } from "@/lib/api";
+import { isAuthenticated } from "@/lib/auth";
 
 export function LoginPage() {
   const navigate = useNavigate();
+  const { login } = useAuth();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  function handleSubmit(e: React.FormEvent) {
+  if (isAuthenticated()) {
+    return <Navigate to="/" replace />;
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (login(username.trim(), password)) {
+    setError("");
+    setLoading(true);
+    try {
+      const response = await api.login({
+        username: username.trim(),
+        password,
+      });
+      login(response);
       navigate("/", { replace: true });
-      return;
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Sai tên đăng nhập hoặc mật khẩu",
+      );
+    } finally {
+      setLoading(false);
     }
-    setError("Sai tên đăng nhập hoặc mật khẩu");
   }
 
   return (
@@ -56,11 +75,9 @@ export function LoginPage() {
                 onChange={(e) => setPassword(e.target.value)}
               />
             </div>
-            {error && (
-              <p className="text-sm text-destructive">{error}</p>
-            )}
-            <Button type="submit" className="w-full">
-              Đăng nhập
+            {error && <p className="text-sm text-destructive">{error}</p>}
+            <Button type="submit" className="w-full" disabled={loading}>
+              {loading ? "Đang đăng nhập..." : "Đăng nhập"}
             </Button>
           </form>
         </CardContent>

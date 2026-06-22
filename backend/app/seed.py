@@ -1,8 +1,13 @@
-"""Default bot configuration seeded on first startup."""
+"""Default bot configuration and admin user seeded on first startup."""
+
+import json
 
 from sqlalchemy.orm import Session
 
-from app.models import BotConfig, BotStatus, TradingMode
+from app.config import get_settings
+from app.core.permissions import ALL_PERMISSIONS, ADMIN_ROLE
+from app.core.security import hash_password
+from app.models import BotConfig, BotStatus, TradingMode, User
 
 
 def _default_xauusd_bot() -> BotConfig:
@@ -26,7 +31,7 @@ def _default_xauusd_bot() -> BotConfig:
         isolated_leverage=50,
         base_equity_usd=200.0,
         first_layer_notional_usd=6750.0,
-        dca_volume_multiplier=1.35,
+        dca_volume_multiplier=1.0,
         layer_spacing_min=4.0,
         layer_spacing_max=4.0,
         basket_tp_min_usd=1.0,
@@ -46,8 +51,8 @@ def _default_xauusd_bot() -> BotConfig:
         supertrend_multiplier=3.0,
         supertrend_weight=0.30,
         rsi_period=14,
-        rsi_overbought=70.0,
-        rsi_oversold=30.0,
+        rsi_overbought=80.0,
+        rsi_oversold=20.0,
         rsi_weight=0.20,
         ema_period=21,
         ema_weight=0.15,
@@ -61,4 +66,21 @@ def seed_if_empty(db: Session) -> bool:
     if db.query(BotConfig).count() > 0:
         return False
     db.add(_default_xauusd_bot())
+    return True
+
+
+def seed_users_if_empty(db: Session) -> bool:
+    """Insert default admin user when users table is empty."""
+    if db.query(User).count() > 0:
+        return False
+    settings = get_settings()
+    admin = User(
+        username=settings.admin_username,
+        email=settings.admin_email,
+        hashed_password=hash_password(settings.admin_password),
+        role=ADMIN_ROLE,
+        is_active=True,
+    )
+    admin.permissions_json = json.dumps(list(ALL_PERMISSIONS))
+    db.add(admin)
     return True

@@ -1,4 +1,4 @@
-"""Daily PNL guard — profit → SUPER_SAFE; loss cap at 40% balance → DCA_FULL_STACK_LOSS."""
+"""Daily PNL guard — profit/loss cap → chuyển SUPER_SAFE (không đóng lệnh mở)."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ class DailyGuardStatus:
     floating_pnl: float
     total_day_pnl: float
     switch_to_super_safe: bool
-    trigger_dca_full_stack_loss: bool
+    trigger_dca_full_stack_loss: bool  # daily loss cap hit — switch SUPER_SAFE only
     reason: str | None = None
 
 
@@ -86,7 +86,7 @@ def evaluate_daily_guard(
     if trigger_loss:
         reason = (
             f"DAILY_LOSS_CAP total={total:.2f} USD "
-            f"≤ -{loss_limit:.2f} ({loss_cap_pct}% balance) → DCA_FULL_STACK_LOSS"
+            f"≤ -{loss_limit:.2f} ({loss_cap_pct}% balance) → SUPER_SAFE"
         )
     elif switch_safe:
         reason = (

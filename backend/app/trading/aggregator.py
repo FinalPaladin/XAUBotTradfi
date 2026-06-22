@@ -21,9 +21,20 @@ ATR_PERIOD = 14
 ATR_AVG_LOOKBACK = 20
 ATR_DAMPEN_FACTOR = 0.5
 
-RSI_EXHAUSTION_LONG = 75.0
-RSI_EXHAUSTION_SHORT = 25.0
+# Fallback khi config chưa có giá trị hợp lệ
+DEFAULT_RSI_EXHAUSTION_LONG = 80.0
+DEFAULT_RSI_EXHAUSTION_SHORT = 20.0
 EMA_DISTANCE_PENALTY_FACTOR = 0.2
+
+def _rsi_exhaustion_thresholds(config: BotConfig) -> tuple[float, float]:
+    """Ngưỡng chặn entry khi RSI M5 quá mua/quá bán — từ rsi_overbought/oversold UI."""
+    long_cap = getattr(config, "rsi_overbought", None)
+    short_cap = getattr(config, "rsi_oversold", None)
+    return (
+        float(long_cap) if long_cap is not None and long_cap > 0 else DEFAULT_RSI_EXHAUSTION_LONG,
+        float(short_cap) if short_cap is not None and short_cap > 0 else DEFAULT_RSI_EXHAUSTION_SHORT,
+    )
+
 
 H1Trend = Literal["BULLISH", "BEARISH", "NEUTRAL"]
 
@@ -124,21 +135,25 @@ def compute_m5_entry_score(
         "ema_distance_penalty": False,
     }
 
-    if h1_trend == "BULLISH" and m5_raw_rsi is not None and m5_raw_rsi > RSI_EXHAUSTION_LONG:
+    exhaustion_long, exhaustion_short = _rsi_exhaustion_thresholds(config)
+    meta["rsi_exhaustion_long"] = exhaustion_long
+    meta["rsi_exhaustion_short"] = exhaustion_short
+
+    if h1_trend == "BULLISH" and m5_raw_rsi is not None and m5_raw_rsi > exhaustion_long:
         logger.info(
             "BLOCKED LONG (RSI Exhaustion): RSI=%.2f > %.0f",
             m5_raw_rsi,
-            RSI_EXHAUSTION_LONG,
+            exhaustion_long,
         )
         meta["rsi_veto"] = True
         meta["block_reason"] = "rsi_exhaustion_long"
         return 0.0, meta
 
-    if h1_trend == "BEARISH" and m5_raw_rsi is not None and m5_raw_rsi < RSI_EXHAUSTION_SHORT:
+    if h1_trend == "BEARISH" and m5_raw_rsi is not None and m5_raw_rsi < exhaustion_short:
         logger.info(
             "BLOCKED SHORT (RSI Exhaustion): RSI=%.2f < %.0f",
             m5_raw_rsi,
-            RSI_EXHAUSTION_SHORT,
+            exhaustion_short,
         )
         meta["rsi_veto"] = True
         meta["block_reason"] = "rsi_exhaustion_short"

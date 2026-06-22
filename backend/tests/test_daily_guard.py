@@ -169,7 +169,7 @@ def test_daily_loss_cap_triggers_at_40pct_balance(db, guard_config) -> None:
         db, guard_config.id, [], 4300.0, account_balance=100.0
     )
     assert status_hit.trigger_dca_full_stack_loss is True
-    assert "DCA_FULL_STACK_LOSS" in (status_hit.reason or "")
+    assert "SUPER_SAFE" in (status_hit.reason or "")
     assert status_hit.switch_to_super_safe is False
 
 

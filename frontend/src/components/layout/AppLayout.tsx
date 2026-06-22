@@ -1,5 +1,6 @@
 import { Outlet } from "react-router-dom";
 import { AppSidebar } from "./AppSidebar";
+import { UserMenu } from "./UserMenu";
 import { Settings } from "lucide-react";
 
 export function AppLayout() {
@@ -12,6 +13,7 @@ export function AppLayout() {
             <Settings className="h-4 w-4" />
             <span>Bybit TradFi · XAUUSD</span>
           </div>
+          <UserMenu />
         </header>
         <main className="flex-1 overflow-auto p-6">
           <Outlet />

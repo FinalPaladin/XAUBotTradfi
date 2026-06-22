@@ -1,19 +1,45 @@
-const AUTH_KEY = "xaubot_auth";
-const VALID_USER = "admin";
-const VALID_PASSWORD = "123qwe";
+import type { TokenResponse, User } from "./types";
 
-export function login(username: string, password: string): boolean {
-  if (username === VALID_USER && password === VALID_PASSWORD) {
-    sessionStorage.setItem(AUTH_KEY, username);
-    return true;
-  }
-  return false;
+const TOKEN_KEY = "xaubot_token";
+const USER_KEY = "xaubot_user";
+
+export function getToken(): string | null {
+  return sessionStorage.getItem(TOKEN_KEY);
 }
 
-export function logout() {
-  sessionStorage.removeItem(AUTH_KEY);
+export function getStoredUser(): User | null {
+  const raw = sessionStorage.getItem(USER_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as User;
+  } catch {
+    return null;
+  }
+}
+
+export function saveAuth(response: TokenResponse): User {
+  sessionStorage.setItem(TOKEN_KEY, response.access_token);
+  sessionStorage.setItem(USER_KEY, JSON.stringify(response.user));
+  return response.user;
+}
+
+export function logout(): void {
+  sessionStorage.removeItem(TOKEN_KEY);
+  sessionStorage.removeItem(USER_KEY);
 }
 
 export function isAuthenticated(): boolean {
-  return sessionStorage.getItem(AUTH_KEY) === VALID_USER;
+  return Boolean(getToken());
+}
+
+export function hasPermission(user: User | null, permission: string): boolean {
+  if (!user) return false;
+  if (user.role === "Admin") return true;
+  if (user.permissions.includes("admin")) return true;
+  return user.permissions.includes(permission);
+}
+
+export function isAdmin(user: User | null): boolean {
+  if (!user) return false;
+  return user.role === "Admin" || user.permissions.includes("admin");
 }

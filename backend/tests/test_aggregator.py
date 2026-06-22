@@ -310,6 +310,24 @@ def _mock_entry_results(
     ]
 
 
+def test_rsi_veto_respects_config_thresholds(bot_config: BotConfig) -> None:
+    bot_config.rsi_overbought = 80.0
+    bot_config.rsi_oversold = 20.0
+    results = _mock_entry_results(raw_rsi=78.0)
+    score, meta = compute_m5_entry_score(
+        bot_config, results, h1_trend="BULLISH"
+    )
+    assert score != 0.0
+    assert meta["rsi_veto"] is False
+
+    results_high = _mock_entry_results(raw_rsi=81.0)
+    score_blocked, meta_blocked = compute_m5_entry_score(
+        bot_config, results_high, h1_trend="BULLISH"
+    )
+    assert score_blocked == 0.0
+    assert meta_blocked["rsi_veto"] is True
+
+
 def test_rsi_veto_blocks_long_exhaustion(bot_config: BotConfig) -> None:
     results = _mock_entry_results(raw_rsi=76.0)
     score, meta = compute_m5_entry_score(
@@ -354,6 +372,7 @@ def test_dynamic_rsi_sweet_spot_full_weight(bot_config: BotConfig) -> None:
 
 
 def test_dynamic_rsi_fades_above_70(bot_config: BotConfig) -> None:
+    bot_config.rsi_overbought = 80.0
     results = _mock_entry_results(raw_rsi=72.0, close=2400.0, ema_val=2399.5)
     score, meta = compute_m5_entry_score(
         bot_config, results, h1_trend="BULLISH"
