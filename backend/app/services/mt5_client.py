@@ -480,17 +480,21 @@ class MT5Client:
             return False, f"{result.retcode}: {result.comment}"
         return True, None
 
-    def position_close(self, ticket: int) -> CloseFillResult:
+    def _position_close_send(self, ticket: int, *, tick: Any | None = None) -> CloseFillResult:
+        """Gửi lệnh đóng MT5 — không chờ deal history (dùng trong batch close)."""
         if mt5 is None:
             return CloseFillResult(ok=False, error="MetaTrader5 not available")
         if not self._initialized:
             self.initialize(quick=True)
+
         positions = mt5.positions_get(ticket=ticket)
         if not positions:
             return CloseFillResult(ok=False, error=POSITION_NOT_FOUND)
+
         pos = positions[0]
         entry_price = float(pos.price_open)
-        tick = mt5.symbol_info_tick(pos.symbol)
+        if tick is None:
+            tick = mt5.symbol_info_tick(pos.symbol)
         if tick is None:
             return CloseFillResult(ok=False, error=str(mt5.last_error()))
 
@@ -523,18 +527,87 @@ class MT5Client:
             )
 
         deal_ticket = int(result.deal) if result.deal else None
-        fill_price, net_pnl = self._resolve_close_fill(ticket, deal_ticket)
+        fill_price = float(result.price) if result.price else price
+        return CloseFillResult(
+            ok=True,
+            fill_price=fill_price,
+            deal_ticket=deal_ticket,
+            entry_price=entry_price,
+        )
 
+    def _finalize_close_result(
+        self, ticket: int, sent: CloseFillResult, *, fallback_price: float | None = None
+    ) -> CloseFillResult:
+        if not sent.ok:
+            return sent
+
+        fill_price, net_pnl = self._resolve_close_fill(ticket, sent.deal_ticket)
         if fill_price is None:
-            fill_price = float(result.price) if result.price else price
-
+            fill_price = sent.fill_price or fallback_price
         return CloseFillResult(
             ok=True,
             fill_price=fill_price,
             net_pnl=net_pnl,
-            deal_ticket=deal_ticket,
-            entry_price=entry_price,
+            deal_ticket=sent.deal_ticket,
+            entry_price=sent.entry_price,
         )
+
+    def position_close(self, ticket: int) -> CloseFillResult:
+        sent = self._position_close_send(ticket)
+        if not sent.ok:
+            return sent
+        return self._finalize_close_result(ticket, sent)
+
+    def positions_close_batch(self, tickets: list[int]) -> dict[int, CloseFillResult]:
+        """
+        Đóng nhiều position gần như cùng lúc:
+        1) Lấy tick một lần / symbol
+        2) Gửi toàn bộ order_send liên tiếp (không chờ deal history giữa các lệnh)
+        3) Resolve P&L sau một lần
+        """
+        if not tickets:
+            return {}
+        if mt5 is None:
+            err = CloseFillResult(ok=False, error="MetaTrader5 not available")
+            return {ticket: err for ticket in tickets}
+        if not self._initialized:
+            self.initialize(quick=True)
+
+        tick_cache: dict[str, Any] = {}
+        sent_by_ticket: dict[int, CloseFillResult] = {}
+
+        for ticket in tickets:
+            positions = mt5.positions_get(ticket=ticket)
+            if not positions:
+                sent_by_ticket[ticket] = CloseFillResult(
+                    ok=False, error=POSITION_NOT_FOUND
+                )
+                continue
+
+            symbol = positions[0].symbol
+            if symbol not in tick_cache:
+                tick_cache[symbol] = mt5.symbol_info_tick(symbol)
+            sent_by_ticket[ticket] = self._position_close_send(
+                ticket, tick=tick_cache[symbol]
+            )
+
+        if any(result.ok for result in sent_by_ticket.values()):
+            time.sleep(0.08)
+
+        finalized: dict[int, CloseFillResult] = {}
+        for ticket in tickets:
+            sent = sent_by_ticket.get(ticket)
+            if sent is None:
+                finalized[ticket] = CloseFillResult(
+                    ok=False, error=POSITION_NOT_FOUND
+                )
+                continue
+            if not sent.ok:
+                finalized[ticket] = sent
+                continue
+            finalized[ticket] = self._finalize_close_result(ticket, sent)
+
+        return finalized
 
     def position_close_legacy(
         self, ticket: int

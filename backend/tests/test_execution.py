@@ -57,6 +57,8 @@ class FakeMT5Client:
         self.history_pnl = history_pnl
         self.open_positions = open_positions or []
         self.open_tickets = open_tickets or set()
+        self.batch_calls: list[list[int]] = []
+        self.close_results: dict[int, CloseFillResult] = {}
 
     def positions_get(self, symbol: str | None = None, magic: int | None = None) -> list:
         positions = list(self.open_positions)
@@ -73,7 +75,17 @@ class FakeMT5Client:
         return None
 
     def position_close(self, ticket: int) -> CloseFillResult:
-        return self.close_result
+        return self.close_results.get(ticket, self.close_result)
+
+    def positions_close_batch(self, tickets: list[int]) -> dict[int, CloseFillResult]:
+        self.batch_calls.append(list(tickets))
+        out: dict[int, CloseFillResult] = {}
+        for ticket in tickets:
+            if ticket in self.close_results:
+                out[ticket] = self.close_results[ticket]
+            else:
+                out[ticket] = self.close_result
+        return out
 
     def position_is_open(self, ticket: int) -> bool:
         if ticket in self.open_tickets:
@@ -132,6 +144,7 @@ def test_close_reconciles_when_mt5_position_missing(db: Session) -> None:
     assert history.exit_price == 4295.0
     assert history.profit_loss == -10.0
     assert history.close_reason == "MANUAL_MARKET_ALL"
+    assert client.batch_calls == [[12345]]
 
 
 def test_close_still_raises_when_mt5_reports_missing_but_position_open(
@@ -182,6 +195,59 @@ def test_write_closed_history_skips_duplicate_ticket(db: Session) -> None:
     assert db.query(TradePosition).count() == 0
     assert history.id == existing.id
     assert history.profit_loss == -20.0
+
+
+def _add_position_with_ticket(
+    db: Session,
+    *,
+    ticket_id: str,
+    layer_index: int = 0,
+    entry_price: float = 4300.0,
+    side: OrderSide = OrderSide.SELL,
+) -> TradePosition:
+    pos = TradePosition(
+        bot_id=1,
+        ticket_id=ticket_id,
+        symbol="XAUUSD+",
+        side=side,
+        volume=0.01,
+        entry_price=entry_price,
+        layer_index=layer_index,
+        opened_at=datetime.now(timezone.utc),
+    )
+    db.add(pos)
+    db.commit()
+    db.refresh(pos)
+    return pos
+
+
+def test_close_basket_uses_single_batch_and_shared_closed_at(db: Session) -> None:
+    bot = db.get(BotConfig, 1)
+    assert bot is not None
+
+    positions = [
+        _add_position_with_ticket(db, ticket_id="1001", layer_index=0, entry_price=4112.0),
+        _add_position_with_ticket(db, ticket_id="1002", layer_index=1, entry_price=4116.0),
+        _add_position_with_ticket(db, ticket_id="1003", layer_index=2, entry_price=4120.0),
+    ]
+
+    client = FakeMT5Client(
+        close_result=CloseFillResult(
+            ok=True,
+            fill_price=4117.0,
+            net_pnl=1.0,
+            entry_price=4112.0,
+        )
+    )
+    executor = OrderExecutor(db, client=client)
+
+    histories = executor.close_basket(bot, positions, "BASKET_TP")
+
+    assert len(histories) == 3
+    assert db.query(TradePosition).count() == 0
+    assert client.batch_calls == [[1001, 1002, 1003]]
+    closed_times = {h.closed_at for h in histories}
+    assert len(closed_times) == 1
 
 
 def test_close_uses_fill_when_mt5_close_succeeds(db: Session) -> None:

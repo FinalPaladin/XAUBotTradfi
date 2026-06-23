@@ -263,6 +263,14 @@ class OrderExecutor:
             return round((exit_px - entry_px) * position.volume * 100, 2)
         return round((entry_px - exit_px) * position.volume * 100, 2)
 
+    def _sort_positions_for_close(
+        self, positions: list[TradePosition]
+    ) -> list[TradePosition]:
+        return sorted(
+            positions,
+            key=lambda p: (getattr(p, "layer_index", 0) or 0, p.opened_at, p.ticket_id),
+        )
+
     def _write_closed_history(
         self,
         bot: BotConfig,
@@ -271,6 +279,8 @@ class OrderExecutor:
         entry_px: float,
         exit_px: float,
         pnl: float,
+        *,
+        closed_at: datetime | None = None,
     ) -> TradeHistory:
         existing = (
             self.db.query(TradeHistory)
@@ -300,7 +310,7 @@ class OrderExecutor:
             profit_loss=pnl,
             close_reason=reason,
             opened_at=coerce_utc(position.opened_at),
-            closed_at=utc_now(),
+            closed_at=closed_at or utc_now(),
         )
         self.db.add(history)
         self.db.delete(position)
@@ -326,6 +336,8 @@ class OrderExecutor:
         reason: str,
         fill: CloseFillResult,
         exit_price: float | None = None,
+        *,
+        closed_at: datetime | None = None,
     ) -> TradeHistory:
         entry_px = fill.entry_price or position.entry_price
         exit_px = fill.fill_price or exit_price or entry_px
@@ -340,7 +352,13 @@ class OrderExecutor:
             pnl = self._estimate_pnl(position, entry_px, exit_px)
 
         return self._write_closed_history(
-            bot, position, reason, entry_px, exit_px, pnl
+            bot,
+            position,
+            reason,
+            entry_px,
+            exit_px,
+            pnl,
+            closed_at=closed_at,
         )
 
     def _reconcile_stale_position(
@@ -382,17 +400,63 @@ class OrderExecutor:
         reason: str,
         exit_price: float | None = None,
     ) -> TradeHistory:
-        fill = self._client.position_close(int(position.ticket_id))
-        if not fill.ok:
-            if fill.error == POSITION_NOT_FOUND:
-                return self._reconcile_stale_position(
-                    bot, position, reason, exit_price=exit_price
-                )
-            raise RuntimeError(fill.error or "close failed")
-
-        return self._finalize_close_from_fill(
-            bot, position, reason, fill, exit_price=exit_price
+        histories = self._close_positions_batch(
+            bot, [position], reason, exit_price=exit_price
         )
+        if not histories:
+            raise RuntimeError(f"close failed ticket={position.ticket_id}")
+        return histories[0]
+
+    def _close_positions_batch(
+        self,
+        bot: BotConfig,
+        positions: list[TradePosition],
+        reason: str,
+        exit_price: float | None = None,
+    ) -> list[TradeHistory]:
+        if not positions:
+            return []
+
+        ordered = self._sort_positions_for_close(positions)
+        tickets = [int(pos.ticket_id) for pos in ordered]
+        fills = self._client.positions_close_batch(tickets)
+        closed_at = utc_now()
+        histories: list[TradeHistory] = []
+
+        for pos in ordered:
+            ticket = int(pos.ticket_id)
+            try:
+                fill = fills.get(ticket)
+                if fill is None:
+                    raise RuntimeError(f"no fill for ticket={ticket}")
+                if not fill.ok:
+                    if fill.error == POSITION_NOT_FOUND:
+                        histories.append(
+                            self._reconcile_stale_position(
+                                bot, pos, reason, exit_price=exit_price
+                            )
+                        )
+                    else:
+                        raise RuntimeError(fill.error or "close failed")
+                    continue
+
+                histories.append(
+                    self._finalize_close_from_fill(
+                        bot,
+                        pos,
+                        reason,
+                        fill,
+                        exit_price=exit_price,
+                        closed_at=closed_at,
+                    )
+                )
+            except RuntimeError:
+                raise
+            except Exception:
+                logger.exception("batch close failed ticket=%s", pos.ticket_id)
+                continue
+
+        return histories
 
     def close_basket(
         self,
@@ -402,19 +466,13 @@ class OrderExecutor:
         exit_price: float | None = None,
     ) -> list[TradeHistory]:
         """
-        Joint Close — đóng TOÀN BỘ lớp lệnh trong basket cùng một tick.
+        Joint Close — gửi toàn bộ lệnh đóng MT5 trong một batch (cùng tick/symbol).
 
         Dùng cho Basket TP (+1..+3 USD) và Hard Stop (Black Swan 35 giá Vàng).
         """
-        histories: list[TradeHistory] = []
-        for pos in positions:
-            try:
-                histories.append(
-                    self.close_position(bot, pos, reason, exit_price=exit_price)
-                )
-            except Exception:
-                continue
-        return histories
+        return self._close_positions_batch(
+            bot, positions, reason, exit_price=exit_price
+        )
 
     def close_all_for_bot(self, bot: BotConfig, reason: str = "STOP_ALL") -> int:
         positions = (
@@ -422,14 +480,7 @@ class OrderExecutor:
             .filter(TradePosition.bot_id == bot.id)
             .all()
         )
-        closed = 0
-        for pos in positions:
-            try:
-                self.close_position(bot, pos, reason)
-                closed += 1
-            except Exception:
-                continue
-        return closed
+        return len(self._close_positions_batch(bot, positions, reason))
 
     def close_all_bots(self, reason: str = "STOP_ALL") -> int:
         bots = self.db.query(BotConfig).all()
