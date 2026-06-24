@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from app.models import BotConfig
+from app.models import BotConfig, OrderSide
 from app.services.mt5_client import get_mt5_client
 
 
@@ -48,3 +48,15 @@ class MarketDataProvider:
         if tick is None:
             raise RuntimeError(f"No tick for {symbol}")
         return (tick.bid + tick.ask) / 2.0
+
+    def exit_price(self, symbol: str, side: OrderSide) -> float:
+        """
+        Giá đóng thực tế trên MT5 — LONG đóng ở bid, SHORT đóng ở ask.
+        Dùng khi kiểm tra basket/core TP để tránh mid-price ảo (chốt sớm).
+        """
+        tick = self._client.tick(symbol)
+        if tick is None:
+            raise RuntimeError(f"No tick for {symbol}")
+        if side == OrderSide.BUY:
+            return float(tick.bid)
+        return float(tick.ask)

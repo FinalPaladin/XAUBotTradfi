@@ -13,6 +13,7 @@ from app.trading.basket_manager import (
     calculate_adverse_distance,
     calculate_breakeven_price,
     calculate_net_pnl_usd,
+    check_basket_profit_target,
     check_hard_stop_loss,
     check_joint_take_profit,
     check_max_basket_loss_usd,
@@ -165,15 +166,24 @@ def test_max_basket_loss_pct(dca_config: BotConfig) -> None:
 def test_per_layer_dca_tp(dca_config: BotConfig) -> None:
     from app.trading.basket_manager import check_per_layer_dca_tp
 
-    layer = PositionLayer(
-        ticket_id="2",
+    core_layer = PositionLayer(
+        ticket_id="1",
         side=OrderSide.SELL,
         volume=0.02,
         entry_price=2650.0,
         layer_index=1,
     )
-    assert not check_per_layer_dca_tp(dca_config, layer, 2649.6, 200.0)
-    assert check_per_layer_dca_tp(dca_config, layer, 2648.5, 200.0)
+    assert not check_per_layer_dca_tp(dca_config, core_layer, 2648.5, 200.0)
+
+    satellite = PositionLayer(
+        ticket_id="3",
+        side=OrderSide.SELL,
+        volume=0.02,
+        entry_price=2650.0,
+        layer_index=3,
+    )
+    assert not check_per_layer_dca_tp(dca_config, satellite, 2649.6, 200.0)
+    assert check_per_layer_dca_tp(dca_config, satellite, 2648.5, 200.0)
 
 
 def test_max_basket_loss_usd(dca_config: BotConfig) -> None:
@@ -308,3 +318,58 @@ def test_build_position_basket_from_mock_positions() -> None:
     assert basket is not None
     assert basket.layer_count == 2
     assert basket.is_multi_layer
+
+
+def test_core_tp_requires_bid_not_mid(dca_config: BotConfig) -> None:
+    """Regression: mid ~1.57 USD ảo nhưng bid thực < $1 — không chốt core."""
+    basket = _basket_buy(
+        [(4083.61, 0.01), (4079.67, 0.01), (4075.75, 0.01)],
+    )
+    assert check_basket_profit_target(dca_config, basket, 4080.85, 100.0)
+    assert not check_basket_profit_target(dca_config, basket, 4079.70, 100.0)
+
+
+def test_core_basket_tp_closes_only_core_layers(dca_config: BotConfig) -> None:
+    """4 lớp: core 3 lớp đủ TP → chỉ đóng ticket 0,1,2."""
+    basket = _basket_buy(
+        [
+            (2650.0, 0.01),
+            (2645.0, 0.01),
+            (2640.0, 0.01),
+            (2635.0, 0.01),
+        ]
+    )
+    decision = evaluate_basket(
+        dca_config,
+        basket,
+        2647.5,
+        AggregatedSignal([], 0.0, int(NetSignal.HOLD)),
+        account_balance=200.0,
+    )
+    assert decision.action == BasketAction.CLOSE_BASKET_TP
+    assert decision.close_reason == "CORE_BASKET_TP"
+    assert decision.close_ticket_ids == ["0", "1", "2"]
+
+
+def test_total_loss_cut_without_full_stack(dca_config: BotConfig) -> None:
+    """Cắt all khi tổng lỗ ≥ 40% balance — không cần đủ 4 lớp."""
+    dca_config.max_basket_loss_pct = 40.0
+    basket = _basket_sell([(4100.0, 0.01), (4105.0, 0.01)])
+    decision = evaluate_basket(
+        dca_config,
+        basket,
+        4150.0,
+        AggregatedSignal([], 0.0, int(NetSignal.HOLD)),
+        account_balance=150.0,
+    )
+    assert decision.action == BasketAction.CLOSE_DCA_FULL_STACK_LOSS
+
+
+def test_unlimited_dca_layers_normal(dca_config: BotConfig) -> None:
+    ctx = BasketContext(main_trend=MainTrend.BULLISH)
+    layers = [(2650.0 - i * 5, 0.01) for i in range(6)]
+    basket = _basket_buy(layers)
+    assert effective_max_layers(dca_config, basket, ctx) == 999
+    assert should_add_dca_layer(
+        dca_config, basket, 2615.0, ctx=ctx, net_pnl_usd=-4.0
+    )

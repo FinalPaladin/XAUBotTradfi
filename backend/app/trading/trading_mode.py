@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from app.models import BotConfig, TradingMode
 
-# DCA-4 strategy (NORMAL)
-NORMAL_MAX_LAYERS = 4
-NORMAL_LAYER_SPACING = 4.0
+# DCA strategy (NORMAL) — core gồng 3 lớp, DCA vệ tinh không giới hạn
+NORMAL_MAX_LAYERS = 999
+NORMAL_CORE_HOLD_LAYERS = 3
+NORMAL_LAYER_SPACING = 5.0
 NORMAL_BASKET_TP_USD = 1.0
 NORMAL_FULL_STACK_LOSS_PCT = 40.0
 
@@ -59,10 +60,18 @@ def effective_scalp_entry_threshold(config: BotConfig) -> float:
     return SCALP_ENTRY_THRESHOLD
 
 
+def effective_core_hold_layers(config: BotConfig) -> int:
+    """Số lớp gồng chung (joint TP) — NORMAL: 3, SUPER_SAFE: 2."""
+    if is_super_safe(config):
+        return SUPER_SAFE_MAX_LAYERS
+    return NORMAL_CORE_HOLD_LAYERS
+
+
 def effective_max_layers(config: BotConfig) -> int:
-    cap = SUPER_SAFE_MAX_LAYERS if is_super_safe(config) else NORMAL_MAX_LAYERS
-    stored = getattr(config, "max_layers", None) or config.max_open_positions
-    return min(stored, cap)
+    if is_super_safe(config):
+        stored = getattr(config, "max_layers", None) or config.max_open_positions
+        return min(stored, SUPER_SAFE_MAX_LAYERS) if stored else SUPER_SAFE_MAX_LAYERS
+    return NORMAL_MAX_LAYERS
 
 
 def effective_layer_spacing_min(config: BotConfig) -> float:
@@ -93,4 +102,5 @@ def effective_counter_trend_max_layers(config: BotConfig) -> int:
 
 
 def effective_full_stack_layer_count(config: BotConfig) -> int:
-    return effective_max_layers(config)
+    """Legacy alias — dùng effective_core_hold_layers cho joint TP."""
+    return effective_core_hold_layers(config)

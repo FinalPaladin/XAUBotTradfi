@@ -92,6 +92,7 @@ class BasketDecision:
     action: BasketAction
     close_reason: str | None = None
     meta: dict = field(default_factory=dict)
+    close_ticket_ids: list[str] | None = None
 
 
 OHLCV = pd.DataFrame

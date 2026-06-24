@@ -28,7 +28,7 @@ def format_tick_log(result: dict) -> str:
         (
             f"  entry {s['entry_tf']} | net_signal={s['net_signal']} "
             f"(raw={s['entry_net_raw']}) | score={s['entry_score']:+.2f} "
-            f"(need >={s['entry_threshold']:.2f} LONG / "
+            f"(gate >={s['entry_threshold']:.2f} LONG / "
             f"<={-s['entry_threshold']:.2f} SHORT)"
         ),
         (

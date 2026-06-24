@@ -2,13 +2,18 @@
 Đánh giá vị thế trong chế độ DCA Scalping.
 
 - 1 lớp: scalp TP qua basket_manager hoặc broker TP
-- Lớp DCA (>=1): đóng riêng khi đạt DCA layer TP (P1)
-- Multi-layer: lớp 0 không đóng qua broker TP (orchestrator gỡ TP trên MT5)
+- Core gồng (layer 0..2): joint close qua evaluate_basket
+- Lớp vệ tinh (layer >= 3): chốt lẻ khi đạt TP min
+- Multi-layer core: lớp 0 không đóng qua broker TP (orchestrator gỡ TP trên MT5)
 """
 
 from __future__ import annotations
 
 from app.models import BotConfig, OrderSide, TradePosition
+from app.trading.basket_manager import (
+    check_position_dca_layer_tp,
+    effective_core_hold_layers,
+)
 from app.trading.types import AggregatedSignal, PositionAction, PositionDecision
 
 
@@ -27,6 +32,18 @@ def evaluate_position(
     _ = signal
     ticket = position.ticket_id
     layer_index = getattr(position, "layer_index", 0) or 0
+    core_cap = effective_core_hold_layers(config)
+
+    if layer_index >= core_cap:
+        if check_position_dca_layer_tp(
+            config, position, current_price, account_balance
+        ):
+            return PositionDecision(
+                PositionAction.CLOSE_DCA_LAYER_TP,
+                ticket,
+                close_reason="SATELLITE_LAYER_TP",
+            )
+        return PositionDecision(PositionAction.HOLD, ticket)
 
     if basket_is_multi_layer:
         return PositionDecision(PositionAction.HOLD, ticket)

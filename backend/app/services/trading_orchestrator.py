@@ -13,6 +13,7 @@ from app.services.telegram.bridge import notify_trade_closed, notify_trade_opene
 from app.services.telegram.notifier import TradeAlertNotifier, get_trade_alert_notifier
 from app.trading.basket_manager import (
     BasketContext,
+    UNLIMITED_DCA_LAYERS,
     build_position_basket,
     calculate_net_pnl_usd,
     effective_max_layers,
@@ -38,7 +39,7 @@ from app.trading.risk import (
     build_order_plan,
     resolve_account_balance,
 )
-from app.trading.signal_engine import check_trend_and_entry_signal
+from app.trading.signal_engine import check_trend_and_entry_signal, resolve_entry_gate_threshold
 from app.trading.signal_format import (
     allowed_nets_label,
     breakdown_weighted_score,
@@ -87,7 +88,12 @@ def _build_tick_summary(
         "filter_log": meta.get("filter_log", ""),
         "entry_tf": trend_signal.entry_timeframe,
         "entry_score": trend_signal.entry_score,
-        "entry_threshold": entry_bd["threshold"],
+        "entry_threshold": resolve_entry_gate_threshold(
+            bot,
+            main_trend=trend_signal.main_trend,
+            is_scalp_mode=trend_signal.is_scalp_mode,
+        ),
+        "aggregator_threshold": entry_bd["threshold"],
         "entry_net_raw": net_signal_label(meta.get("entry_net_raw", 0)),
         "net_signal": net_signal_label(trend_signal.net_signal),
         "donchian": entry_bd["donchian"],
@@ -291,10 +297,11 @@ class TradingOrchestrator:
                 )
                 basket_peak_pnl = update_basket_peak_pnl(anchor_pos, net_pnl)
 
+                exit_price = self._market.exit_price(bot.symbol, basket.side)
                 decision = evaluate_basket(
                     bot,
                     basket,
-                    price,
+                    exit_price,
                     signal,
                     account_balance,
                     ctx=basket_ctx,
@@ -303,7 +310,8 @@ class TradingOrchestrator:
 
                 if decision.action != BasketAction.HOLD:
                     reason = decision.close_reason or decision.action.value
-                    pnl = decision.meta.get("net_pnl_usd")
+                    pnl = decision.meta.get("core_pnl_usd", decision.meta.get("net_pnl_usd"))
+                    tp_min = decision.meta.get("basket_tp_min_usd")
                     if decision.action == BasketAction.CLOSE_PANIC_SIGNAL:
                         closed = self._executor.close_all_for_bot(
                             bot, reason=reason
@@ -321,16 +329,25 @@ class TradingOrchestrator:
                             f"(M5={basket_ctx.entry_score:+.2f}) P&L={pnl} USD"
                         )
                     else:
-                        self._executor.close_basket(bot, side_positions, reason)
+                        close_ids = decision.close_ticket_ids
+                        if close_ids:
+                            to_close = [
+                                p for p in side_positions if p.ticket_id in close_ids
+                            ]
+                        else:
+                            to_close = side_positions
+                        self._executor.close_basket(bot, to_close, reason)
                         log_message(
                             self.db,
-                            f"Joint close {basket.layer_count} {side.value} layers "
-                            f"reason={reason} pnl={pnl} USD",
+                            f"Joint close {len(to_close)}/{basket.layer_count} "
+                            f"{side.value} layers reason={reason} "
+                            f"core_pnl={pnl} (tp_min={tp_min}) "
+                            f"exit_px={exit_price:.2f} total_pnl={decision.meta.get('net_pnl_usd')} USD",
                             bot_id=bot.id,
                             source="execution",
                         )
                         action_label = (
-                            f"JOINT CLOSE {basket.layer_count} {side.value} — "
+                            f"JOINT CLOSE {len(to_close)} {side.value} — "
                             f"{reason} P&L={pnl} USD"
                         )
                     self.db.commit()
@@ -340,22 +357,35 @@ class TradingOrchestrator:
                     pos_decision = evaluate_position(
                         bot,
                         pos,
-                        price,
+                        exit_price,
                         signal,
                         account_balance=account_balance,
                         basket_is_multi_layer=basket.is_multi_layer,
                     )
                     if pos_decision.action != PositionAction.HOLD:
+                        reason = pos_decision.close_reason or pos_decision.action.value
                         self._apply_decision(bot, pos, pos_decision, price)
+                        log_message(
+                            self.db,
+                            f"Closed {pos.ticket_id} layer={getattr(pos, 'layer_index', 0)} "
+                            f"reason={reason}",
+                            bot_id=bot.id,
+                            source="execution",
+                        )
                         self.db.commit()
                         return {
                             "summary": make_summary(
-                                action=f"CLOSE ticket={pos.ticket_id}"
+                                action=f"CLOSE ticket={pos.ticket_id} ({reason})"
                             )
                         }
 
                 net_pnl = calculate_net_pnl_usd(basket, price)
                 side_max_layers = effective_max_layers(bot, basket, basket_ctx)
+                layer_cap_label = (
+                    str(side_max_layers)
+                    if side_max_layers < UNLIMITED_DCA_LAYERS
+                    else "∞"
+                )
 
                 if (
                     should_add_dca_layer(
@@ -388,18 +418,18 @@ class TradingOrchestrator:
                                 position,
                                 trend_signal,
                                 extra=(
-                                    f"DCA lớp {next_layer + 1}/{side_max_layers}"
+                                    f"DCA lớp {next_layer + 1}/{layer_cap_label}"
                                 ),
                             )
                         log_message(
                             self.db,
-                            f"DCA layer {next_layer + 1}/{side_max_layers} "
+                            f"DCA layer {next_layer + 1}/{layer_cap_label} "
                             f"{plan.side.value} {plan.volume} @ {price}",
                             bot_id=bot.id,
                             source="execution",
                         )
                         action_msg = (
-                            f"DCA lớp {next_layer + 1}/{side_max_layers} "
+                            f"DCA lớp {next_layer + 1}/{layer_cap_label} "
                             f"{plan.side.value} vol={plan.volume}"
                         )
                     self.db.commit()

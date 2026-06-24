@@ -12,12 +12,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from app.models import BotConfig, OrderSide, TradePosition
-from app.trading.risk import resolve_single_tp_min
+from app.trading.risk import resolve_basket_tp_min, resolve_single_tp_min
 from app.trading.signal_engine import SCALP_ENTRY_THRESHOLD, MainTrend
 from app.trading.trading_mode import (
-    effective_basket_tp_usd,
+    effective_core_hold_layers,
     effective_counter_trend_max_layers,
-    effective_full_stack_layer_count,
     effective_full_stack_loss_pct,
     effective_layer_spacing_min,
     effective_max_layers as mode_max_layers,
@@ -33,6 +32,7 @@ BASKET_TIME_STOP_ADVERSE_MIN = 8.0
 MAX_BASKET_AGE_MINUTES = 300
 BASKET_TRAIL_ACTIVATE_USD = 3.0
 BASKET_TRAIL_FLOOR_USD = 1.0
+UNLIMITED_DCA_LAYERS = 999
 
 
 @dataclass
@@ -233,12 +233,43 @@ def effective_max_layers(
     basket: PositionBasket,
     ctx: BasketContext,
 ) -> int:
-    """Mode cap + counter-trend / scalp baskets capped further."""
+    """DCA cap — NORMAL: không giới hạn; counter-trend / scalp vẫn bị cap."""
     base = mode_max_layers(config)
     counter_cap = effective_counter_trend_max_layers(config)
     if is_basket_counter_trend(basket, ctx.main_trend) or ctx.is_scalp_mode:
         return min(base, counter_cap)
     return base
+
+
+def core_hold_layers(basket: PositionBasket, config: BotConfig) -> list[PositionLayer]:
+    """Lớp 0..N-1 gồng chung — joint TP khi tổng core dương đủ ngưỡng."""
+    cap = effective_core_hold_layers(config)
+    return [layer for layer in basket.layers if layer.layer_index < cap]
+
+
+def satellite_layers(basket: PositionBasket, config: BotConfig) -> list[PositionLayer]:
+    """Lớp DCA từ index >= core_hold — chốt lẻ khi từng lệnh có lời."""
+    cap = effective_core_hold_layers(config)
+    return [layer for layer in basket.layers if layer.layer_index >= cap]
+
+
+def _sub_basket(parent: PositionBasket, layers: list[PositionLayer]) -> PositionBasket:
+    return PositionBasket(
+        side=parent.side,
+        layers=layers,
+        anchor_price=parent.anchor_price,
+    )
+
+
+def calculate_core_hold_pnl_usd(
+    config: BotConfig,
+    basket: PositionBasket,
+    current_price: float,
+) -> float:
+    core = core_hold_layers(basket, config)
+    if not core:
+        return 0.0
+    return calculate_net_pnl_usd(_sub_basket(basket, core), current_price)
 
 
 def calculate_layer_pnl_usd(layer: PositionLayer, current_price: float) -> float:
@@ -341,10 +372,13 @@ def check_basket_profit_target(
     config: BotConfig,
     basket: PositionBasket,
     current_price: float,
+    account_balance: float | None = None,
 ) -> bool:
-    """Joint close khi tổng P&L basket ≥ target (~$1 NORMAL, ~$0.5 SUPER_SAFE)."""
-    net_pnl = calculate_net_pnl_usd(basket, current_price)
-    return net_pnl >= effective_basket_tp_usd(config)
+    """Joint close core gồng khi tổng P&L core ≥ basket_tp_min (scale theo balance)."""
+    balance = account_balance or config.base_equity_usd or 200.0
+    tp_min = resolve_basket_tp_min(config, balance)
+    core_pnl = calculate_core_hold_pnl_usd(config, basket, current_price)
+    return core_pnl >= tp_min
 
 
 def check_dca_full_stack_loss(
@@ -353,10 +387,7 @@ def check_dca_full_stack_loss(
     current_price: float,
     account_balance: float | None = None,
 ) -> bool:
-    """Đủ lớp DCA (4 NORMAL / 2 SUPER_SAFE) và tổng lỗ ≥ % balance."""
-    required = effective_full_stack_layer_count(config)
-    if basket.layer_count < required:
-        return False
+    """Tổng lỗ basket ≥ % balance → cắt toàn bộ (không cần đủ số lớp)."""
     net_pnl = calculate_net_pnl_usd(basket, current_price)
     if net_pnl >= 0:
         return False
@@ -406,13 +437,23 @@ def check_per_layer_dca_tp(
     current_price: float,
     account_balance: float | None = None,
 ) -> bool:
-    """P1: đóng riêng lớp DCA (layer_index >= 1) khi đạt scalp TP min."""
-    if layer.layer_index < 1:
+    """Đóng riêng lớp DCA vệ tinh (layer_index >= core_hold) khi đạt scalp TP min."""
+    if layer.layer_index < effective_core_hold_layers(config):
         return False
     pnl = calculate_layer_pnl_usd(layer, current_price)
     balance = account_balance or config.base_equity_usd or 200.0
     tp_min = resolve_single_tp_min(config, balance)
     return pnl >= tp_min
+
+
+def check_satellite_layer_tp(
+    config: BotConfig,
+    layer: PositionLayer,
+    current_price: float,
+    account_balance: float | None = None,
+) -> bool:
+    """Alias — lớp DCA sau core gồng."""
+    return check_per_layer_dca_tp(config, layer, current_price, account_balance)
 
 
 def check_position_dca_layer_tp(
@@ -421,9 +462,9 @@ def check_position_dca_layer_tp(
     current_price: float,
     account_balance: float | None = None,
 ) -> bool:
-    """Wrapper per-ticket cho orchestrator."""
+    """Wrapper per-ticket — chỉ lớp vệ tinh (index >= core_hold)."""
     layer_index = getattr(position, "layer_index", 0) or 0
-    if layer_index < 1:
+    if layer_index < effective_core_hold_layers(config):
         return False
     layer = PositionLayer(
         ticket_id=position.ticket_id,
@@ -547,8 +588,7 @@ def should_add_dca_layer(
     """
     Logic DCA: nhồi lớp tiếp theo khi giá chạy ngược đủ xa.
 
-    P0 catch-up: spacing >= min là đủ (bỏ chặn spacing > max khi giá nhảy nhanh).
-    Hủy DCA khi lỗ > 50% max basket loss limit.
+    Không giới hạn số lớp (NORMAL). Hủy DCA khi lỗ > 50% max basket loss limit.
     """
     max_layers = (
         effective_max_layers(config, basket, ctx)
@@ -584,13 +624,11 @@ def evaluate_basket(
     basket_peak_pnl: float | None = None,
 ) -> BasketDecision:
     """
-    Đánh giá basket — chỉ còn 2 rule thoát theo chiến lược DCA-4:
+    Đánh giá basket — 3 rule thoát:
 
-    1. DCA full-stack loss (40% balance, đủ 4 lớp, đang lỗ)
-    2. Basket profit target (~$1)
-
-    Các rule cắt sớm (M5_REVERSAL, PANIC, TIME_STOP, TRAIL, MAX_AGE,
-    TREND_FLIP, ATR_STOP, HARD_STOP) đã tắt — để DCA gồng đủ spacing.
+    1. Tổng lỗ basket ≥ % balance (40%) → đóng hết
+    2. Core gồng (≤3 lớp đầu) P&L ≥ basket TP → đóng core (giữ vệ tinh nếu có)
+    3. Lớp vệ tinh (index ≥ 3) — chốt lẻ qua position_monitor
     """
     _ = signal
     if ctx is None:
@@ -598,12 +636,17 @@ def evaluate_basket(
 
     breakeven = calculate_breakeven_price(basket)
     net_pnl = calculate_net_pnl_usd(basket, current_price)
+    core_pnl = calculate_core_hold_pnl_usd(config, basket, current_price)
     adverse = calculate_adverse_distance(basket, current_price)
+    core = core_hold_layers(basket, config)
 
     meta = {
         "layer_count": basket.layer_count,
+        "core_layer_count": len(core),
+        "satellite_layer_count": len(satellite_layers(basket, config)),
         "breakeven_price": breakeven,
         "net_pnl_usd": net_pnl,
+        "core_pnl_usd": core_pnl,
         "adverse_distance": round(adverse, 2),
         "total_volume": basket.total_volume,
         "basket_age_min": round(basket_age_minutes(basket), 1),
@@ -617,11 +660,20 @@ def evaluate_basket(
             meta=meta,
         )
 
-    if check_basket_profit_target(config, basket, current_price):
+    if core and check_basket_profit_target(
+        config, basket, current_price, account_balance
+    ):
+        tp_min = resolve_basket_tp_min(
+            config, account_balance or config.base_equity_usd or 200.0
+        )
+        core_tickets = [layer.ticket_id for layer in core]
+        meta["core_pnl_usd"] = core_pnl
+        meta["basket_tp_min_usd"] = tp_min
         return BasketDecision(
             BasketAction.CLOSE_BASKET_TP,
-            close_reason="BASKET_TP",
+            close_reason="CORE_BASKET_TP",
             meta=meta,
+            close_ticket_ids=core_tickets,
         )
 
     return BasketDecision(BasketAction.HOLD, meta=meta)

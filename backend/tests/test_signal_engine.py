@@ -99,6 +99,47 @@ def test_bearish_h1_blocks_reversal_long(
     assert "BLOCKED LONG" in result.meta["filter_log"]
 
 
+def test_resolve_entry_gate_threshold_normal_bearish(bot_config: BotConfig) -> None:
+    from app.trading.signal_engine import resolve_entry_gate_threshold
+
+    assert (
+        resolve_entry_gate_threshold(
+            bot_config, main_trend=MainTrend.BEARISH
+        )
+        == 0.5
+    )
+
+
+def test_bearish_h1_blocks_weak_short(
+    bot_config: BotConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """NORMAL: M5 -0.38 không đủ ngưỡng 0.50 — không mở lớp 1."""
+    market = _mock_market(
+        monkeypatch,
+        h1_net=int(NetSignal.SELL),
+        entry_net=int(NetSignal.SELL),
+        entry_score=-0.38,
+    )
+    result = check_trend_and_entry_signal(bot_config, market)
+    assert result.net_signal == int(NetSignal.HOLD)
+    assert "BLOCKED" in result.meta["filter_log"]
+    assert "0.5" in result.meta["filter_log"]
+
+
+def test_bullish_h1_blocks_weak_long(
+    bot_config: BotConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    market = _mock_market(
+        monkeypatch,
+        h1_net=int(NetSignal.BUY),
+        entry_net=int(NetSignal.BUY),
+        entry_score=0.38,
+    )
+    result = check_trend_and_entry_signal(bot_config, market)
+    assert result.net_signal == int(NetSignal.HOLD)
+    assert "BLOCKED" in result.meta["filter_log"]
+
+
 def test_bearish_h1_allows_short(
     bot_config: BotConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -126,7 +167,7 @@ def test_bullish_h1_allows_long_entry(
     assert result.main_trend == MainTrend.BULLISH
     assert result.net_signal == int(NetSignal.BUY)
     assert result.is_scalp_mode is False
-    assert "NORMAL - 100% Volume" in result.meta["filter_log"]
+    assert "NORMAL, need >= +0.5" in result.meta["filter_log"]
 
 
 def test_bullish_h1_blocks_short(

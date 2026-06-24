@@ -23,6 +23,26 @@ from app.trading.types import AggregatedSignal, NetSignal, StrategyResult
 
 ENTRY_TIMEFRAME = "M5"
 SCALP_ENTRY_THRESHOLD = 0.8
+# NORMAL + H1 trend: lớp 1 chỉ khi M5 đủ mạnh (tránh vào yếu kiểu -0.38)
+NORMAL_TREND_MIN_SCORE = 0.50
+
+
+def resolve_entry_gate_threshold(
+    config: BotConfig,
+    *,
+    main_trend: MainTrend,
+    is_scalp_mode: bool = False,
+) -> float:
+    """
+    Ngưỡng |M5 score| thực tế để mở lớp 1 (sau filter H1) — dùng cho worker log/UI.
+
+    Khác aggregator net threshold (có ATR dampen ~0.33): đây là gate cuối.
+    """
+    if main_trend == MainTrend.NEUTRAL:
+        return effective_scalp_entry_threshold(config)
+    if is_super_safe(config):
+        return effective_signal_threshold(config)
+    return NORMAL_TREND_MIN_SCORE
 
 
 class MainTrend(str, Enum):
@@ -91,6 +111,7 @@ def _filter_entry_signal(
     - H1 BEARISH: chỉ SHORT (chặn LONG ngược trend).
     - H1 NEUTRAL: scalp mode khi điểm M5 cực cao (>= scalp_threshold).
     - SUPER_SAFE: không vào khi H1 NEUTRAL (chỉ thuận trend + ngưỡng cao).
+    - NORMAL + H1 trend: lớp 1 cần |M5 score| >= NORMAL_TREND_MIN_SCORE (0.50).
     """
     if main_trend == MainTrend.BULLISH:
         if super_safe:
@@ -103,14 +124,19 @@ def _filter_entry_signal(
                 f"H1 BULLISH | M5 Score: {entry_score:+.2f} "
                 f"-> BLOCKED (SUPER_SAFE need >= +{entry_threshold} LONG)"
             )
-        if entry_net == int(NetSignal.BUY):
-            return entry_net, False, (
+        if entry_score >= NORMAL_TREND_MIN_SCORE:
+            return int(NetSignal.BUY), False, (
                 f"H1 BULLISH | M5 Score: {entry_score:+.2f} "
-                f"-> Allowed LONG (NORMAL - 100% Volume)"
+                f"-> Allowed LONG (NORMAL, need >= +{NORMAL_TREND_MIN_SCORE})"
+            )
+        if entry_net == int(NetSignal.SELL):
+            return int(NetSignal.HOLD), False, (
+                f"H1 BULLISH | M5 Score: {entry_score:+.2f} "
+                f"-> BLOCKED SHORT (trend-only mode)"
             )
         return int(NetSignal.HOLD), False, (
             f"H1 BULLISH | M5 Score: {entry_score:+.2f} "
-            f"-> BLOCKED SHORT (trend-only mode)"
+            f"-> BLOCKED (NORMAL need >= +{NORMAL_TREND_MIN_SCORE} LONG)"
         )
 
     if main_trend == MainTrend.BEARISH:
@@ -124,14 +150,19 @@ def _filter_entry_signal(
                 f"H1 BEARISH | M5 Score: {entry_score:+.2f} "
                 f"-> BLOCKED (SUPER_SAFE need <= -{entry_threshold} SHORT)"
             )
-        if entry_net == int(NetSignal.SELL):
-            return entry_net, False, (
+        if entry_score <= -NORMAL_TREND_MIN_SCORE:
+            return int(NetSignal.SELL), False, (
                 f"H1 BEARISH | M5 Score: {entry_score:+.2f} "
-                f"-> Allowed SHORT (NORMAL - 100% Volume)"
+                f"-> Allowed SHORT (NORMAL, need <= -{NORMAL_TREND_MIN_SCORE})"
+            )
+        if entry_net == int(NetSignal.BUY):
+            return int(NetSignal.HOLD), False, (
+                f"H1 BEARISH | M5 Score: {entry_score:+.2f} "
+                f"-> BLOCKED LONG (trend-only mode)"
             )
         return int(NetSignal.HOLD), False, (
             f"H1 BEARISH | M5 Score: {entry_score:+.2f} "
-            f"-> BLOCKED LONG (trend-only mode)"
+            f"-> BLOCKED (NORMAL need <= -{NORMAL_TREND_MIN_SCORE} SHORT)"
         )
 
     if super_safe:
