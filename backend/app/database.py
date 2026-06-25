@@ -173,7 +173,7 @@ def _migrate_risk_tuning() -> None:
             conn.execute(
                 text(
                     "UPDATE bot_config SET counter_trend_max_layers = 1 "
-                    "WHERE counter_trend_max_layers IS NULL OR counter_trend_max_layers >= 5"
+                    "WHERE counter_trend_max_layers IS NULL"
                 )
             )
         if "max_basket_loss_pct" in existing:
@@ -187,7 +187,7 @@ def _migrate_risk_tuning() -> None:
             conn.execute(
                 text(
                     "UPDATE bot_config SET max_layers = 2, max_open_positions = 2 "
-                    "WHERE max_layers >= 5 OR max_open_positions >= 5"
+                    "WHERE max_layers >= 999 OR max_open_positions >= 999"
                 )
             )
         if "hard_stop_adverse_distance" in existing:
@@ -203,7 +203,7 @@ def _migrate_risk_tuning() -> None:
                 text(
                     "UPDATE bot_config SET single_tp_min_usd = 2.0, "
                     "single_tp_distance = 2.0 "
-                    "WHERE single_tp_min_usd <= 1.0 OR single_tp_distance <= 1.2"
+                    "WHERE single_tp_min_usd = 1.0 AND single_tp_distance = 1.2"
                 )
             )
         if "basket_time_stop_minutes" in existing:
@@ -294,8 +294,8 @@ def _migrate_trading_mode_and_dca_v4() -> None:
                     "basket_tp_min_usd = 1.0, "
                     "single_tp_min_usd = 1.0, "
                     "max_basket_loss_pct = 40.0 "
-                    "WHERE max_layers >= 5 OR layer_spacing_min >= 5.0 "
-                    "OR basket_tp_min_usd >= 2.0"
+                    "WHERE max_layers >= 5 AND layer_spacing_min = 5.0 "
+                    "AND layer_spacing_max = 5.0 AND basket_tp_min_usd >= 2.0"
                 )
             )
         else:
@@ -310,8 +310,8 @@ def _migrate_trading_mode_and_dca_v4() -> None:
                     "basket_tp_min_usd = 1.0, "
                     "single_tp_min_usd = 1.0, "
                     "max_basket_loss_pct = 40.0 "
-                    "WHERE max_layers >= 5 OR layer_spacing_min >= 5.0 "
-                    "OR basket_tp_min_usd >= 2.0"
+                    "WHERE max_layers >= 5 AND layer_spacing_min = 5.0 "
+                    "AND layer_spacing_max = 5.0 AND basket_tp_min_usd >= 2.0"
                 )
             )
 
@@ -379,7 +379,7 @@ def _migrate_dca_strategy_v2() -> None:
                     "counter_trend_max_layers = 5 "
                     "WHERE max_layers <= 2 "
                     "OR max_basket_loss_usd <= 10 "
-                    "OR layer_spacing_min >= 6.0 "
+                    "OR (layer_spacing_min >= 7.0 AND layer_spacing_max >= 7.0) "
                     "OR counter_trend_max_layers <= 1"
                 )
             )
@@ -396,7 +396,7 @@ def _migrate_dca_strategy_v2() -> None:
                     "counter_trend_max_layers = 5 "
                     "WHERE max_layers <= 2 "
                     "OR max_basket_loss_usd <= 10 "
-                    "OR layer_spacing_min >= 6.0 "
+                    "OR (layer_spacing_min >= 7.0 AND layer_spacing_max >= 7.0) "
                     "OR counter_trend_max_layers <= 1"
                 )
             )

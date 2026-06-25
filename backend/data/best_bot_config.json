@@ -1,0 +1,20 @@
+{
+  "optimized_at": "2026-06-24T14:43:42.952756+00:00",
+  "fitness": 25.639,
+  "backtest_metrics": {
+    "total_pnl_usd": 1021.0,
+    "profit_factor": 1.6461,
+    "max_drawdown_pct": 54.49,
+    "trade_count": 632,
+    "win_count": 508,
+    "gross_profit": 2601.27,
+    "gross_loss": 1580.27
+  },
+  "donchian_weight": 0.5478,
+  "supertrend_weight": 0.0991,
+  "rsi_weight": 0.2858,
+  "ema_weight": 0.0673,
+  "single_tp_distance": 1.0466,
+  "layer_spacing_min": 6.5375,
+  "weights_sum": 1.0
+}
