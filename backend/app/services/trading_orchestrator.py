@@ -40,6 +40,7 @@ from app.trading.risk import (
     resolve_account_balance,
 )
 from app.trading.signal_engine import check_trend_and_entry_signal, resolve_entry_gate_threshold
+from app.trading.ai.ai_filter import MetaLabelingFilter, get_meta_labeling_filter
 from app.trading.signal_format import (
     allowed_nets_label,
     breakdown_weighted_score,
@@ -124,6 +125,7 @@ class TradingOrchestrator:
             ),
         )
         self._mt5 = get_mt5_client()
+        self._ai_filter: MetaLabelingFilter = get_meta_labeling_filter()
 
     def run_tick(self, bot: BotConfig) -> dict:
         if bot.status != BotStatus.RUNNING:
@@ -193,7 +195,9 @@ class TradingOrchestrator:
                         daily_guard.reason,
                     )
 
-            trend_signal = check_trend_and_entry_signal(bot, self._market)
+            trend_signal = check_trend_and_entry_signal(
+                bot, self._market, ai_filter=self._ai_filter
+            )
             signal = trend_signal.as_aggregated()
 
             floating_pnl = compute_total_floating_pnl(

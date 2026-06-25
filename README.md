@@ -21,7 +21,8 @@ Bot/
 │   │   ├── models.py        # SQLAlchemy ORM
 │   │   ├── schemas.py       # Pydantic DTO cho API/UI
 │   │   ├── core/            # JWT, permissions, security
-│   │   ├── trading/         # indicators, strategies, basket DCA, risk
+│   │   ├── trading/         # indicators, strategies, basket DCA, risk, ai/
+│   │   │   └── ai/          # Meta-Labeling XGBoost (train + inference)
 │   │   ├── services/        # mt5_client, bot_service, orchestrator, telegram
 │   │   ├── worker/          # trading loop (Windows + MT5, file lock)
 │   │   └── api/routers/
@@ -29,6 +30,7 @@ Bot/
 │   │       ├── admin.py     # /api/admin/users
 │   │       └── bot.py       # /api/bot/*
 │   ├── tests/
+│   ├── data/                # CSV backtest (xauusd_m5/h1), meta_model.xgb
 │   ├── requirements.txt
 │   ├── docker-compose.yml
 │   └── .env.example
@@ -80,6 +82,50 @@ Chọn chế độ trên UI **Cấu hình Bot** → bấm **Lưu**. Chọn **Nor
 - Weighted score: Donchian + SuperTrend + RSI động + EMA21.
 - **RSI exhaustion** — chặn LONG/SHORT khi M5 RSI vượt `rsi_overbought` / `rsi_oversold` (mặc định **80 / 20**, chỉnh trên UI).
 - H1 xác định trend; M5 timing entry.
+
+### Meta-Labeling AI (XGBoost)
+
+Lớp phòng ngự bổ sung: dự báo xác suất **Win/Loss** của tín hiệu entry M5 trước khi vào lệnh.
+
+| Thành phần | Mô tả |
+| ---------- | ----- |
+| `app/trading/ai/train_meta_labeling.py` | Huấn luyện offline từ CSV lịch sử |
+| `app/trading/ai/ai_filter.py` | `MetaLabelingFilter` — inference live (<10ms/tick) |
+| `app/trading/ai/features.py` | 20 features (ATR, RSI, EMA distance, H1 trend, phiên giao dịch, …) |
+| `data/meta_model.xgb` | Model đã train |
+| `data/meta_model_meta.json` | Feature names, metrics, ngưỡng Win % |
+
+**Luồng live:** Worker load model **1 lần** khi khởi tạo `TradingOrchestrator` → sau khi `_filter_entry_signal` cho phép LONG/SHORT, nếu xác suất Win **< 55%** → ép `HOLD` và log `[AI FILTER] Blocked entry due to low win probability`.
+
+**Fail-open:** không có file model → filter tắt, bot giao dịch bình thường.
+
+#### Huấn luyện model
+
+```bash
+cd backend
+pip install -r requirements.txt   # gồm xgboost, scikit-learn
+python -m app.trading.ai.train_meta_labeling
+```
+
+Tùy chọn:
+
+| Flag | Mô tả | Mặc định |
+| ---- | ----- | -------- |
+| `--m5-csv` | CSV M5 entry | `data/xauusd_m5.csv` |
+| `--h1-csv` | CSV H1 trend | `data/xauusd_h1.csv` |
+| `--config-json` | Trọng số GA / TP distance | `data/best_bot_config.json` |
+| `--lookback` | Số nến lookback (nhỏ = train nhanh hơn) | `200` |
+| `--max-m5-bars` | Giới hạn nến M5 (debug) | toàn bộ file |
+| `--min-win-prob` | Ngưỡng inference (%) | `55` |
+
+Sau khi retrain, **restart worker** để load model mới.
+
+#### Labeling (offline)
+
+Mô phỏng lớp 1 tại close của nến có signal hợp lệ:
+
+- **Win (1):** giá chạm TP (`single_tp_distance`) trước SL (`hard_stop_adverse_distance`)
+- **Loss (0):** chạm SL trước, hoặc hết horizon (~24h M5)
 
 ### Cảnh báo Telegram
 
@@ -197,6 +243,7 @@ python -m app.worker
 cd backend
 pip install pytest
 pytest tests/ -q
+pytest tests/test_signal_engine.py tests/test_ai_filter.py -q   # signal + AI filter
 ```
 
 ## Chạy frontend (React + Shadcn UI)
@@ -242,3 +289,4 @@ docker compose up --build
 - **Đổi chế độ giao dịch:** chọn Normal / Siêu an toàn trên UI rồi bấm **Lưu** (chỉ click chọn chưa đủ).
 - **Worker lock:** nếu gặp `Another worker holds the lock`, chỉ giữ một instance — xem [RUNNING_GUIDE.md](docs/RUNNING_GUIDE.md).
 - **Close reason phổ biến:** `BASKET_TP`, `DCA_FULL_STACK_LOSS`, `SCALP_TP`, `POSITION_LOSS_16U` (chỉ khi `max_layers ≤ 1`).
+- **Meta-Labeling:** retrain khi có thêm dữ liệu M5 hoặc đổi config GA (`best_bot_config.json`); tick log có `ai_win_probability` khi filter bật.

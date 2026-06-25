@@ -1,0 +1,33 @@
+{
+  "feature_names": [
+    "atr_current",
+    "atr_ratio",
+    "atr_factor",
+    "ema_distance_pct",
+    "rsi",
+    "entry_score",
+    "h1_score",
+    "donchian_score",
+    "supertrend_score",
+    "rsi_strategy_score",
+    "ema_strategy_score",
+    "h1_trend_code",
+    "hour_norm",
+    "day_of_week_norm",
+    "session_asia",
+    "session_london",
+    "session_new_york",
+    "is_scalp_mode",
+    "direction",
+    "spread"
+  ],
+  "min_win_probability": 55.0,
+  "metrics": {
+    "train_samples": 520,
+    "test_samples": 130,
+    "win_rate_train": 0.9096153846153846,
+    "win_rate_test": 0.9230769230769231,
+    "test_auc": 0.5883333333333334
+  },
+  "classification_report": "              precision    recall  f1-score   support\n\n           0      0.091     0.500     0.154        10\n           1      0.933     0.583     0.718       120\n\n    accuracy                          0.577       130\n   macro avg      0.512     0.542     0.436       130\nweighted avg      0.869     0.577     0.675       130\n"
+}

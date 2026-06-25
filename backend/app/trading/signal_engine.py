@@ -8,8 +8,10 @@ Luồng:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from app.models import BotConfig
 from app.trading.aggregator import aggregate_signal, atr_volatility_factor
@@ -21,7 +23,26 @@ from app.trading.trading_mode import (
 )
 from app.trading.types import AggregatedSignal, NetSignal, StrategyResult
 
+if TYPE_CHECKING:
+    from app.trading.ai.ai_filter import MetaLabelingFilter
+
+logger = logging.getLogger(__name__)
+
 ENTRY_TIMEFRAME = "M5"
+AI_FILTER_MIN_WIN_PROBABILITY = 55.0
+
+
+class _DisabledMetaLabelingFilter:
+    """Placeholder khi worker không bật AI filter."""
+
+    is_active = False
+    min_win_probability = AI_FILTER_MIN_WIN_PROBABILITY
+
+    def predict_win_probability(self, features: dict[str, float]) -> float:
+        return 100.0
+
+
+_NO_AI_FILTER = _DisabledMetaLabelingFilter()
 SCALP_ENTRY_THRESHOLD = 0.8
 # NORMAL + H1 trend: lớp 1 chỉ khi M5 đủ mạnh (tránh vào yếu kiểu -0.38)
 NORMAL_TREND_MIN_SCORE = 0.50
@@ -95,6 +116,42 @@ def _resolve_main_trend(h1_net: int) -> tuple[MainTrend, str, set[int]]:
     return MainTrend.NEUTRAL, "NONE", set()
 
 
+def _apply_ai_meta_filter(
+    final_net: int,
+    is_scalp_mode: bool,
+    filter_log: str,
+    *,
+    ai_filter: MetaLabelingFilter | None,
+    ai_features: dict[str, float] | None,
+) -> tuple[int, bool, str]:
+    """Lớp Meta-Labeling: chặn entry khi xác suất Win < ngưỡng."""
+    if (
+        ai_filter is None
+        or not ai_filter.is_active
+        or final_net not in (int(NetSignal.BUY), int(NetSignal.SELL))
+        or not ai_features
+    ):
+        return final_net, is_scalp_mode, filter_log
+
+    features = dict(ai_features)
+    features["direction"] = 1.0 if final_net == int(NetSignal.BUY) else -1.0
+    features["is_scalp_mode"] = 1.0 if is_scalp_mode else 0.0
+    win_prob = ai_filter.predict_win_probability(features)
+    if win_prob < ai_filter.min_win_probability:
+        logger.info(
+            "[AI FILTER] Blocked entry due to low win probability (%.1f%%)",
+            win_prob,
+        )
+        return int(NetSignal.HOLD), is_scalp_mode, (
+            f"{filter_log} | [AI FILTER] Blocked entry due to low win probability "
+            f"({win_prob:.1f}%)"
+        )
+
+    return final_net, is_scalp_mode, (
+        f"{filter_log} | [AI FILTER] Win probability {win_prob:.1f}%"
+    )
+
+
 def _filter_entry_signal(
     entry_net: int,
     entry_score: float,
@@ -103,6 +160,8 @@ def _filter_entry_signal(
     entry_threshold: float,
     scalp_threshold: float,
     super_safe: bool,
+    ai_filter: MetaLabelingFilter | None = None,
+    ai_features: dict[str, float] | None = None,
 ) -> tuple[int, bool, str]:
     """
     Lọc tín hiệu M5 theo xu hướng H1.
@@ -116,18 +175,30 @@ def _filter_entry_signal(
     if main_trend == MainTrend.BULLISH:
         if super_safe:
             if entry_score >= entry_threshold:
-                return int(NetSignal.BUY), False, (
-                    f"H1 BULLISH | M5 Score: {entry_score:+.2f} "
-                    f"-> Allowed LONG (SUPER_SAFE, need >= +{entry_threshold})"
+                return _apply_ai_meta_filter(
+                    int(NetSignal.BUY),
+                    False,
+                    (
+                        f"H1 BULLISH | M5 Score: {entry_score:+.2f} "
+                        f"-> Allowed LONG (SUPER_SAFE, need >= +{entry_threshold})"
+                    ),
+                    ai_filter=ai_filter,
+                    ai_features=ai_features,
                 )
             return int(NetSignal.HOLD), False, (
                 f"H1 BULLISH | M5 Score: {entry_score:+.2f} "
                 f"-> BLOCKED (SUPER_SAFE need >= +{entry_threshold} LONG)"
             )
         if entry_score >= NORMAL_TREND_MIN_SCORE:
-            return int(NetSignal.BUY), False, (
-                f"H1 BULLISH | M5 Score: {entry_score:+.2f} "
-                f"-> Allowed LONG (NORMAL, need >= +{NORMAL_TREND_MIN_SCORE})"
+            return _apply_ai_meta_filter(
+                int(NetSignal.BUY),
+                False,
+                (
+                    f"H1 BULLISH | M5 Score: {entry_score:+.2f} "
+                    f"-> Allowed LONG (NORMAL, need >= +{NORMAL_TREND_MIN_SCORE})"
+                ),
+                ai_filter=ai_filter,
+                ai_features=ai_features,
             )
         if entry_net == int(NetSignal.SELL):
             return int(NetSignal.HOLD), False, (
@@ -142,18 +213,30 @@ def _filter_entry_signal(
     if main_trend == MainTrend.BEARISH:
         if super_safe:
             if entry_score <= -entry_threshold:
-                return int(NetSignal.SELL), False, (
-                    f"H1 BEARISH | M5 Score: {entry_score:+.2f} "
-                    f"-> Allowed SHORT (SUPER_SAFE, need <= -{entry_threshold})"
+                return _apply_ai_meta_filter(
+                    int(NetSignal.SELL),
+                    False,
+                    (
+                        f"H1 BEARISH | M5 Score: {entry_score:+.2f} "
+                        f"-> Allowed SHORT (SUPER_SAFE, need <= -{entry_threshold})"
+                    ),
+                    ai_filter=ai_filter,
+                    ai_features=ai_features,
                 )
             return int(NetSignal.HOLD), False, (
                 f"H1 BEARISH | M5 Score: {entry_score:+.2f} "
                 f"-> BLOCKED (SUPER_SAFE need <= -{entry_threshold} SHORT)"
             )
         if entry_score <= -NORMAL_TREND_MIN_SCORE:
-            return int(NetSignal.SELL), False, (
-                f"H1 BEARISH | M5 Score: {entry_score:+.2f} "
-                f"-> Allowed SHORT (NORMAL, need <= -{NORMAL_TREND_MIN_SCORE})"
+            return _apply_ai_meta_filter(
+                int(NetSignal.SELL),
+                False,
+                (
+                    f"H1 BEARISH | M5 Score: {entry_score:+.2f} "
+                    f"-> Allowed SHORT (NORMAL, need <= -{NORMAL_TREND_MIN_SCORE})"
+                ),
+                ai_filter=ai_filter,
+                ai_features=ai_features,
             )
         if entry_net == int(NetSignal.BUY):
             return int(NetSignal.HOLD), False, (
@@ -172,14 +255,26 @@ def _filter_entry_signal(
         )
 
     if entry_score >= scalp_threshold:
-        return int(NetSignal.BUY), True, (
-            f"H1 NEUTRAL | M5 Score: {entry_score:+.2f} "
-            f"-> OVERRIDE: Allowed LONG (SCALP MODE - 50% Volume)"
+        return _apply_ai_meta_filter(
+            int(NetSignal.BUY),
+            True,
+            (
+                f"H1 NEUTRAL | M5 Score: {entry_score:+.2f} "
+                f"-> OVERRIDE: Allowed LONG (SCALP MODE - 50% Volume)"
+            ),
+            ai_filter=ai_filter,
+            ai_features=ai_features,
         )
     if entry_score <= -scalp_threshold:
-        return int(NetSignal.SELL), True, (
-            f"H1 NEUTRAL | M5 Score: {entry_score:+.2f} "
-            f"-> OVERRIDE: Allowed SHORT (SCALP MODE - 50% Volume)"
+        return _apply_ai_meta_filter(
+            int(NetSignal.SELL),
+            True,
+            (
+                f"H1 NEUTRAL | M5 Score: {entry_score:+.2f} "
+                f"-> OVERRIDE: Allowed SHORT (SCALP MODE - 50% Volume)"
+            ),
+            ai_filter=ai_filter,
+            ai_features=ai_features,
         )
     return int(NetSignal.HOLD), False, (
         f"H1 NEUTRAL | M5 Score: {entry_score:+.2f} "
@@ -191,6 +286,8 @@ def _filter_entry_signal(
 def check_trend_and_entry_signal(
     config: BotConfig,
     market: MarketDataProvider | None = None,
+    *,
+    ai_filter: MetaLabelingFilter | None = None,
 ) -> TrendEntrySignal:
     """
     Quét H1 (trend) + M5 (entry) và trả về tín hiệu vào lệnh đã lọc.
@@ -220,6 +317,24 @@ def check_trend_and_entry_signal(
         h1_trend=main_trend.value,
     )
 
+    if ai_filter is None:
+        ai_filter = _NO_AI_FILTER
+
+    ai_features = None
+    if ai_filter.is_active:
+        from app.trading.ai.features import build_entry_features
+
+        ai_features = build_entry_features(
+            df_m5=df_entry,
+            df_h1=df_h1,
+            config=config,
+            main_trend=main_trend,
+            entry_score=entry_signal.weighted_score,
+            h1_score=h1_signal.weighted_score,
+            entry_net=entry_signal.net_signal,
+            is_scalp_mode=False,
+        )
+
     final_net, is_scalp_mode, filter_log = _filter_entry_signal(
         entry_signal.net_signal,
         entry_signal.weighted_score,
@@ -227,6 +342,8 @@ def check_trend_and_entry_signal(
         entry_threshold=effective_signal_threshold(config),
         scalp_threshold=effective_scalp_entry_threshold(config),
         super_safe=is_super_safe(config),
+        ai_filter=ai_filter,
+        ai_features=ai_features,
     )
 
     meta = {
@@ -239,7 +356,17 @@ def check_trend_and_entry_signal(
         "atr_factor": atr_factor,
         "atr": atr_meta,
         "entry_scoring": entry_signal.scoring_meta,
+        "ai_win_probability": None,
     }
+
+    if ai_filter.is_active and ai_features and final_net in (
+        int(NetSignal.BUY),
+        int(NetSignal.SELL),
+    ):
+        feat = dict(ai_features)
+        feat["direction"] = 1.0 if final_net == int(NetSignal.BUY) else -1.0
+        feat["is_scalp_mode"] = 1.0 if is_scalp_mode else 0.0
+        meta["ai_win_probability"] = ai_filter.predict_win_probability(feat)
 
     return TrendEntrySignal(
         strategy_results=entry_signal.strategy_results,
