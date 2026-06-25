@@ -3,6 +3,22 @@
 from __future__ import annotations
 
 
+def format_ai_meta_log(
+    win_probability: float | None,
+    threshold: float | None,
+) -> str | None:
+    """Dòng log AI Meta-Labeling cho tick worker / system_logs."""
+    if win_probability is None:
+        return None
+
+    threshold_val = threshold if threshold is not None else 55.0
+    status = "PASS" if win_probability >= threshold_val else "BLOCKED"
+    return (
+        f"AI Meta-Label: win={win_probability:.1f}% | "
+        f"threshold>={threshold_val:.0f}% | {status}"
+    )
+
+
 def format_tick_log(result: dict) -> str:
     if result.get("skipped"):
         return f"bot_id={result.get('bot_id')} skipped ({result.get('reason')})"
@@ -42,6 +58,13 @@ def format_tick_log(result: dict) -> str:
 
     for line in s.get("entry_scoring_monitor") or []:
         lines.append(line)
+
+    ai_line = format_ai_meta_log(
+        s.get("ai_win_probability"),
+        s.get("ai_filter_threshold"),
+    )
+    if ai_line:
+        lines.append(f"  {ai_line}")
 
     filter_log = s.get("filter_log")
     if filter_log:

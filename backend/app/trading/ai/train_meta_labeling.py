@@ -117,7 +117,7 @@ def collect_labeled_samples(
 
         main_trend, _, _ = _resolve_main_trend(int(pc.h1_net[i]))
 
-        final_net, is_scalp_mode, _ = _filter_entry_signal(
+        final_net, is_scalp_mode, _, _ = _filter_entry_signal(
             int(pc.m5_entry_net[i]),
             float(pc.m5_entry_weighted[i]),
             main_trend,

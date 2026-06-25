@@ -47,7 +47,7 @@ from app.trading.signal_format import (
     format_pnl,
     net_signal_label,
 )
-from app.trading.types import BasketAction, PositionAction
+from app.worker.tick_log import format_ai_meta_log
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +87,8 @@ def _build_tick_summary(
         "h1_net": net_signal_label(meta.get("h1_net", 0)),
         "is_scalp_mode": trend_signal.is_scalp_mode,
         "filter_log": meta.get("filter_log", ""),
+        "ai_win_probability": meta.get("ai_win_probability"),
+        "ai_filter_threshold": meta.get("ai_filter_threshold"),
         "entry_tf": trend_signal.entry_timeframe,
         "entry_score": trend_signal.entry_score,
         "entry_threshold": resolve_entry_gate_threshold(
@@ -199,6 +201,18 @@ class TradingOrchestrator:
                 bot, self._market, ai_filter=self._ai_filter
             )
             signal = trend_signal.as_aggregated()
+
+            ai_log_line = format_ai_meta_log(
+                trend_signal.meta.get("ai_win_probability"),
+                trend_signal.meta.get("ai_filter_threshold"),
+            )
+            if ai_log_line:
+                log_message(
+                    self.db,
+                    ai_log_line,
+                    bot_id=bot.id,
+                    source="ai_filter",
+                )
 
             floating_pnl = compute_total_floating_pnl(
                 open_positions, self._mt5, price

@@ -228,7 +228,7 @@ def test_neutral_h1_scalp_override_short(
 
 
 def test_bullish_h1_blocks_short_filter() -> None:
-    net, scalp, log = _filter_entry_signal(
+    net, scalp, log, _ = _filter_entry_signal(
         int(NetSignal.SELL),
         -0.65,
         MainTrend.BULLISH,
@@ -242,7 +242,7 @@ def test_bullish_h1_blocks_short_filter() -> None:
 
 
 def test_filter_entry_signal_neutral_threshold() -> None:
-    net, scalp, log = _filter_entry_signal(
+    net, scalp, log, _ = _filter_entry_signal(
         int(NetSignal.BUY),
         SCALP_ENTRY_THRESHOLD - 0.01,
         MainTrend.NEUTRAL,
@@ -253,7 +253,7 @@ def test_filter_entry_signal_neutral_threshold() -> None:
     assert net == int(NetSignal.HOLD)
     assert "BLOCKED" in log
 
-    net, scalp, log = _filter_entry_signal(
+    net, scalp, log, _ = _filter_entry_signal(
         int(NetSignal.BUY),
         SCALP_ENTRY_THRESHOLD,
         MainTrend.NEUTRAL,
@@ -266,7 +266,7 @@ def test_filter_entry_signal_neutral_threshold() -> None:
 
 
 def test_super_safe_bearish_requires_high_score() -> None:
-    net, _, log = _filter_entry_signal(
+    net, _, log, _ = _filter_entry_signal(
         int(NetSignal.SELL),
         -0.47,
         MainTrend.BEARISH,
@@ -278,7 +278,7 @@ def test_super_safe_bearish_requires_high_score() -> None:
     assert "SUPER_SAFE" in log
     assert "0.8" in log
 
-    net_ok, _, log_ok = _filter_entry_signal(
+    net_ok, _, log_ok, _ = _filter_entry_signal(
         int(NetSignal.SELL),
         -0.85,
         MainTrend.BEARISH,

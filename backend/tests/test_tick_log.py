@@ -1,6 +1,6 @@
 """Tests for worker tick log formatting."""
 
-from app.worker.tick_log import format_tick_log
+from app.worker.tick_log import format_ai_meta_log, format_tick_log
 
 
 def test_format_tick_log_compact_summary() -> None:
@@ -88,3 +88,53 @@ def test_format_tick_log_scalp_mode() -> None:
 def test_format_tick_log_error() -> None:
     text = format_tick_log({"bot_id": 2, "error": "No tick for XAUUSD+"})
     assert "ERROR" in text
+
+
+def test_format_ai_meta_log_pass() -> None:
+    line = format_ai_meta_log(72.5, 55.0)
+    assert line is not None
+    assert "win=72.5%" in line
+    assert "threshold>=55%" in line
+    assert "PASS" in line
+
+
+def test_format_ai_meta_log_blocked() -> None:
+    line = format_ai_meta_log(40.0, 55.0)
+    assert line is not None
+    assert "BLOCKED" in line
+
+
+def test_format_tick_log_includes_ai_meta() -> None:
+    result = {
+        "summary": {
+            "bot_id": 1,
+            "price": 2400.0,
+            "open_count": 0,
+            "balance": 200.0,
+            "floating_pnl": "0.00",
+            "drawdown_pct": 0.0,
+            "main_trend": "BULLISH",
+            "trend_source": "H1",
+            "allowed": "LONG",
+            "h1_score": 0.7,
+            "h1_net": "BUY",
+            "is_scalp_mode": False,
+            "filter_log": "Allowed LONG | [AI FILTER] Win probability 68.2%",
+            "ai_win_probability": 68.2,
+            "ai_filter_threshold": 55.0,
+            "entry_tf": "M5",
+            "entry_score": 0.65,
+            "entry_threshold": 0.5,
+            "entry_net_raw": "BUY",
+            "net_signal": "BUY",
+            "donchian": 1.0,
+            "supertrend": 1.0,
+            "rsi": 0.5,
+            "ema21": 0.5,
+            "formula": "mock",
+            "action": None,
+        }
+    }
+    text = format_tick_log(result)
+    assert "AI Meta-Label: win=68.2%" in text
+    assert "PASS" in text

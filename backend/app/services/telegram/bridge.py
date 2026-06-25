@@ -95,6 +95,14 @@ def build_entry_reason(
     filter_log = trend_signal.meta.get("filter_log", "")
     if filter_log:
         lines.append(str(filter_log))
+    ai_win = trend_signal.meta.get("ai_win_probability")
+    ai_threshold = trend_signal.meta.get("ai_filter_threshold")
+    if ai_win is not None:
+        threshold_val = ai_threshold if ai_threshold is not None else 55.0
+        status = "PASS" if ai_win >= threshold_val else "BLOCKED"
+        lines.append(
+            f"AI Meta-Label: win={ai_win:.1f}% | threshold>={threshold_val:.0f}% | {status}"
+        )
     for monitor_line in format_entry_scoring_monitor(
         trend_signal.meta.get("entry_scoring")
     ):

@@ -49,7 +49,7 @@ def test_ai_filter_blocks_low_probability() -> None:
     mock_filter.min_win_probability = 55.0
     mock_filter.predict_win_probability.return_value = 40.0
 
-    net, scalp, log = _apply_ai_meta_filter(
+    net, scalp, log, win_prob = _apply_ai_meta_filter(
         int(NetSignal.BUY),
         False,
         "Allowed LONG",
@@ -57,6 +57,7 @@ def test_ai_filter_blocks_low_probability() -> None:
         ai_features={"direction": 1.0},
     )
     assert net == int(NetSignal.HOLD)
+    assert win_prob == 40.0
     assert "[AI FILTER] Blocked entry due to low win probability" in log
 
 
@@ -66,7 +67,7 @@ def test_filter_entry_signal_with_ai_passes_high_prob() -> None:
     mock_filter.min_win_probability = 55.0
     mock_filter.predict_win_probability.return_value = 72.5
 
-    net, scalp, log = _filter_entry_signal(
+    net, scalp, log, win_prob = _filter_entry_signal(
         int(NetSignal.BUY),
         0.7,
         MainTrend.BULLISH,
@@ -78,4 +79,5 @@ def test_filter_entry_signal_with_ai_passes_high_prob() -> None:
     )
     assert net == int(NetSignal.BUY)
     assert scalp is False
+    assert win_prob == 72.5
     assert "[AI FILTER] Win probability 72.5%" in log
