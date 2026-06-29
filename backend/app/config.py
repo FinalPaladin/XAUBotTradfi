@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     mt5_password: str | None = None
     mt5_server: str | None = None
     worker_tick_seconds: int = 5
+    # Exit worker if no tick completes within this window (MT5 IPC can hang forever).
+    worker_tick_timeout_seconds: int = 90
     mt5_connect_timeout_ms: int = 5000
 
     # Telegram trade alerts (optional — worker skips when unset)

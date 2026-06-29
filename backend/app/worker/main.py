@@ -7,6 +7,7 @@ import logging
 import os
 import signal
 import sys
+import threading
 import time
 
 from app.config import BACKEND_ROOT, get_settings
@@ -24,6 +25,7 @@ logger = logging.getLogger("worker")
 
 _running = True
 _LOCK_FILE = BACKEND_ROOT / "worker.lock"
+_last_tick_completed_at = time.monotonic()
 
 
 def _pid_alive(pid: int) -> bool:
@@ -100,11 +102,35 @@ def _handle_stop(_signum, _frame) -> None:
     _running = False
 
 
+def _start_tick_watchdog(timeout_seconds: int) -> None:
+    """Force-exit when a tick blocks longer than timeout (MT5 IPC has no native timeout)."""
+    check_interval = min(10, max(3, timeout_seconds // 6))
+
+    def _loop() -> None:
+        while _running:
+            time.sleep(check_interval)
+            stalled = time.monotonic() - _last_tick_completed_at
+            if stalled > timeout_seconds:
+                logger.error(
+                    "Worker tick stalled %.0fs (> %ss) — MT5 IPC likely hung; "
+                    "exiting so you can restart the worker",
+                    stalled,
+                    timeout_seconds,
+                )
+                sys.exit(1)
+
+    thread = threading.Thread(
+        target=_loop, name="worker-tick-watchdog", daemon=True
+    )
+    thread.start()
+
+
 def run_loop() -> None:
-    global _running
+    global _running, _last_tick_completed_at
     _acquire_worker_lock()
     settings = get_settings()
     interval = max(1, settings.worker_tick_seconds)
+    tick_timeout = max(interval * 3, settings.worker_tick_timeout_seconds)
 
     signal.signal(signal.SIGINT, _handle_stop)
     if hasattr(signal, "SIGTERM"):
@@ -116,7 +142,8 @@ def run_loop() -> None:
         logger.error("MT5 init failed: %s", status.error)
         sys.exit(1)
 
-    logger.info("Worker started (tick=%ss)", interval)
+    _start_tick_watchdog(tick_timeout)
+    logger.info("Worker started (tick=%ss, stall_timeout=%ss)", interval, tick_timeout)
 
     while _running:
         try:
@@ -135,6 +162,8 @@ def run_loop() -> None:
                         logger.info("\n%s", format_tick_log(result))
         except Exception:
             logger.exception("Worker tick failed — continuing next interval")
+        finally:
+            _last_tick_completed_at = time.monotonic()
 
         time.sleep(interval)
 
