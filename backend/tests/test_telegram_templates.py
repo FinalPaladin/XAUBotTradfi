@@ -22,7 +22,10 @@ def test_build_open_trade_message_long() -> None:
         sl=2640.00,
         tp=2670.00,
         ticket_id="12345678",
-        reason="Tín hiệu đồng thuận từ SuperTrend và RSI Divergence",
+        reason_lines=(
+            "Tín hiệu đồng thuận từ SuperTrend và RSI Divergence",
+        ),
+        win_probability=68.2,
     )
     text = build_open_trade_message(alert)
 
@@ -32,7 +35,10 @@ def test_build_open_trade_message_long() -> None:
     assert "$2,650.50" in text
     assert "12345678" in text
     assert "$2,670.00" in text
+    assert "68.2%" in text
+    assert "Tỷ lệ win" in text
     assert "SL:" not in text
+    assert "• Tín hiệu đồng thuận" in text
     assert "SuperTrend" in text
 
 
@@ -44,7 +50,7 @@ def test_build_open_trade_message_short() -> None:
         sl=None,
         tp=None,
         ticket_id="87654321",
-        reason="Donchian breakdown",
+        reason_lines=("Donchian breakdown",),
     )
     text = build_open_trade_message(alert)
 

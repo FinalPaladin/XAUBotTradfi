@@ -10,7 +10,7 @@ from app.trading.ai.ai_filter import MetaLabelingFilter
 from app.trading.ai.features import FEATURE_NAMES, features_to_vector
 from app.trading.signal_engine import (
     MainTrend,
-    _apply_ai_meta_filter,
+    _apply_entry_safety_filters,
     _filter_entry_signal,
 )
 from app.trading.types import NetSignal
@@ -49,16 +49,46 @@ def test_ai_filter_blocks_low_probability() -> None:
     mock_filter.min_win_probability = 55.0
     mock_filter.predict_win_probability.return_value = 40.0
 
-    net, scalp, log, win_prob = _apply_ai_meta_filter(
+    net, scalp, log, win_prob = _apply_entry_safety_filters(
         int(NetSignal.BUY),
         False,
         "Allowed LONG",
+        entry_score=0.7,
+        atr_ratio=1.0,
         ai_filter=mock_filter,
-        ai_features={"direction": 1.0},
+        ai_features={"direction": 1.0, "atr_ratio": 1.0},
     )
     assert net == int(NetSignal.HOLD)
     assert win_prob == 40.0
     assert "[AI FILTER] Blocked entry due to low win probability" in log
+
+
+def test_safety_filter_blocks_weak_m5() -> None:
+    net, _, log, _ = _apply_entry_safety_filters(
+        int(NetSignal.SELL),
+        False,
+        "Allowed SHORT",
+        entry_score=-0.57,
+        atr_ratio=1.0,
+        ai_filter=None,
+        ai_features=None,
+    )
+    assert net == int(NetSignal.HOLD)
+    assert "[SAFETY] Blocked weak M5" in log
+
+
+def test_safety_filter_blocks_high_atr() -> None:
+    net, _, log, _ = _apply_entry_safety_filters(
+        int(NetSignal.SELL),
+        False,
+        "Allowed SHORT",
+        entry_score=-0.65,
+        atr_ratio=1.27,
+        ai_filter=None,
+        ai_features=None,
+    )
+    assert net == int(NetSignal.HOLD)
+    assert "[ATR GATE]" in log
 
 
 def test_filter_entry_signal_with_ai_passes_high_prob() -> None:
@@ -74,8 +104,9 @@ def test_filter_entry_signal_with_ai_passes_high_prob() -> None:
         entry_threshold=0.65,
         scalp_threshold=0.8,
         super_safe=False,
+        atr_ratio=1.0,
         ai_filter=mock_filter,
-        ai_features={"direction": 1.0},
+        ai_features={"direction": 1.0, "atr_ratio": 1.0},
     )
     assert net == int(NetSignal.BUY)
     assert scalp is False

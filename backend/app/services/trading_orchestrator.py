@@ -47,6 +47,7 @@ from app.trading.signal_format import (
     format_pnl,
     net_signal_label,
 )
+from app.trading.types import BasketAction, PositionAction
 from app.worker.tick_log import format_ai_meta_log
 
 logger = logging.getLogger(__name__)
@@ -171,24 +172,49 @@ class TradingOrchestrator:
             daily_guard = evaluate_daily_guard(
                 self.db, bot.id, open_positions, price, account_balance
             )
-            if (
-                (daily_guard.switch_to_super_safe or daily_guard.trigger_dca_full_stack_loss)
+            if daily_guard.switch_to_super_safe:
+                reverted_manual = bot.trading_mode_manual and bot.trading_mode == TradingMode.NORMAL
+                if bot.trading_mode != TradingMode.SUPER_SAFE or bot.trading_mode_manual:
+                    label = "DAILY PROFIT LOCK"
+                    if reverted_manual:
+                        log_message(
+                            self.db,
+                            f"{label}: {daily_guard.reason} — giữ SUPER_SAFE "
+                            f"(bỏ qua chọn NORMAL thủ công trong ngày)",
+                            bot_id=bot.id,
+                            level=LogLevel.INFO,
+                            source="daily_guard",
+                        )
+                    elif bot.trading_mode != TradingMode.SUPER_SAFE:
+                        log_message(
+                            self.db,
+                            f"{label}: {daily_guard.reason} (giữ lệnh mở)",
+                            bot_id=bot.id,
+                            level=LogLevel.INFO,
+                            source="daily_guard",
+                        )
+                    bot.trading_mode = TradingMode.SUPER_SAFE
+                    bot.trading_mode_manual = False
+                    self.db.flush()
+                elif daily_guard.reason:
+                    logger.info(
+                        "bot_id=%s daily guard: %s (vẫn SUPER_SAFE, giữ lệnh mở)",
+                        bot.id,
+                        daily_guard.reason,
+                    )
+            elif (
+                daily_guard.trigger_dca_full_stack_loss
                 and not bot.trading_mode_manual
             ):
                 if bot.trading_mode != TradingMode.SUPER_SAFE:
-                    label = (
-                        "DAILY PROFIT LOCK"
-                        if daily_guard.switch_to_super_safe
-                        else "DAILY LOSS CAP"
-                    )
-                    bot.trading_mode = TradingMode.SUPER_SAFE
                     log_message(
                         self.db,
-                        f"{label}: {daily_guard.reason} (giữ lệnh mở)",
+                        f"DAILY LOSS CAP: {daily_guard.reason} (giữ lệnh mở)",
                         bot_id=bot.id,
-                        level=LogLevel.INFO if label == "DAILY PROFIT LOCK" else LogLevel.WARNING,
+                        level=LogLevel.WARNING,
                         source="daily_guard",
                     )
+                    bot.trading_mode = TradingMode.SUPER_SAFE
                     self.db.flush()
                 elif daily_guard.reason:
                     logger.info(

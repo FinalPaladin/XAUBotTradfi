@@ -24,7 +24,8 @@ class OpenTradeAlert:
     sl: float | None
     tp: float | None
     ticket_id: str
-    reason: str
+    reason_lines: tuple[str, ...]
+    win_probability: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

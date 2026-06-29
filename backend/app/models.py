@@ -96,7 +96,7 @@ class BotConfig(Base):
         default=TradingMode.NORMAL,
         nullable=False,
     )
-    # True when user explicitly chose NORMAL — skip auto guards re-switching to SUPER_SAFE.
+    # True when user explicitly chose NORMAL — profit lock vẫn ép SUPER_SAFE trong ngày.
     trading_mode_manual: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )

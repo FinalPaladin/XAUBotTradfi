@@ -21,7 +21,7 @@ def test_format_tick_log_compact_summary() -> None:
             "filter_log": "H1 BEARISH | M5 Score: +0.05 -> BLOCKED",
             "entry_tf": "M5",
             "entry_score": 0.05,
-            "entry_threshold": 0.5,
+            "entry_threshold": 0.58,
             "entry_net_raw": "HOLD",
             "net_signal": "HOLD",
             "donchian": 0.0,
@@ -43,7 +43,7 @@ def test_format_tick_log_compact_summary() -> None:
     assert "filter: H1 BEARISH" in text
     assert "Donchian=+0.00" in text
     assert "EMA21=+0.00" in text
-    assert "gate >=0.50" in text or "gate >= +0.50" in text
+    assert "gate >=0.58" in text or "gate >= +0.58" in text
     assert "bot_id=2" in text
     assert "dynamic_notional" not in text
 
@@ -69,7 +69,7 @@ def test_format_tick_log_scalp_mode() -> None:
             ),
             "entry_tf": "M5",
             "entry_score": 0.85,
-            "entry_threshold": 0.5,
+            "entry_threshold": 0.58,
             "entry_net_raw": "BUY",
             "net_signal": "BUY",
             "donchian": 1.0,
@@ -124,7 +124,7 @@ def test_format_tick_log_includes_ai_meta() -> None:
             "ai_filter_threshold": 55.0,
             "entry_tf": "M5",
             "entry_score": 0.65,
-            "entry_threshold": 0.5,
+            "entry_threshold": 0.58,
             "entry_net_raw": "BUY",
             "net_signal": "BUY",
             "donchian": 1.0,

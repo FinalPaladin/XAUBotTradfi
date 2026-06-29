@@ -116,7 +116,7 @@ def test_daily_profit_lock_switches_super_safe(db, guard_config) -> None:
             volume=0.01,
             entry_price=4300.0,
             exit_price=4301.0,
-            profit_loss=31.0,
+            profit_loss=36.0,
             opened_at=now - timedelta(hours=2),
             closed_at=now - timedelta(hours=1),
         )

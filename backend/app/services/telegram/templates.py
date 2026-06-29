@@ -39,13 +39,21 @@ def format_pnl_percent(value: float) -> str:
     return f"{sign}{value:.2f}"
 
 
+def _format_reason_bullets(lines: tuple[str, ...]) -> str:
+    return "\n".join(f"• {escape_html(line.strip())}" for line in lines if line.strip())
+
+
 def build_open_trade_message(alert: OpenTradeAlert) -> str:
     direction = alert.direction.value
     icon = _DIRECTION_ICONS.get(direction, "📊")
     tp = format_price(alert.tp)
-    reason = escape_html(alert.reason.strip())
     symbol = escape_html(alert.symbol.strip())
     ticket_id = escape_html(alert.ticket_id.strip())
+    win_line = ""
+    if alert.win_probability is not None:
+        win_line = (
+            f"📊 Tỷ lệ win: <b>{alert.win_probability:.1f}%</b>\n"
+        )
 
     return (
         f"{icon} <b>{direction}</b> {symbol}\n"
@@ -53,9 +61,10 @@ def build_open_trade_message(alert: OpenTradeAlert) -> str:
         f"📍 Entry: <b>{format_price(alert.entry)}</b>\n"
         f"🆔 ID lệnh: <b>{ticket_id}</b>\n"
         f"🎯 TP: <b>{tp}</b>\n"
+        f"{win_line}"
         f"{BLOCK_DIVIDER}\n"
-        f"📝 <b>Phân tích / Lý do:</b>\n"
-        f"{reason}"
+        f"📝 <b>Lý do vào lệnh:</b>\n"
+        f"{_format_reason_bullets(alert.reason_lines)}"
     )
 
 

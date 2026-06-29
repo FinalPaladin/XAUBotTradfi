@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -78,41 +79,53 @@ def humanize_close_reason(reason: str | None) -> str:
     return key
 
 
-def _strategy_confluence(trend_signal: TrendEntrySignal) -> str:
-    parts: list[str] = []
-    for result in trend_signal.strategy_results:
-        label = _STRATEGY_LABELS.get(result.name, result.name)
-        parts.append(f"{label} {result.score:+.2f}")
-    return " · ".join(parts)
+_AI_WIN_IN_FILTER = re.compile(
+    r"\s*\|\s*\[AI FILTER\]\s*Win probability\s+[\d.]+%",
+    re.IGNORECASE,
+)
 
 
-def build_entry_reason(
+def _strip_ai_win_from_filter_log(filter_log: str) -> str:
+    return _AI_WIN_IN_FILTER.sub("", filter_log).strip()
+
+
+def build_entry_reason_lines(
     trend_signal: TrendEntrySignal,
     *,
     extra: str | None = None,
-) -> str:
-    lines: list[str] = []
+) -> tuple[list[str], float | None]:
+    bullets: list[str] = []
+    win_prob = trend_signal.meta.get("ai_win_probability")
+    ai_threshold = trend_signal.meta.get("ai_filter_threshold")
+
     filter_log = trend_signal.meta.get("filter_log", "")
     if filter_log:
-        lines.append(str(filter_log))
-    ai_win = trend_signal.meta.get("ai_win_probability")
-    ai_threshold = trend_signal.meta.get("ai_filter_threshold")
-    if ai_win is not None:
+        cleaned = _strip_ai_win_from_filter_log(str(filter_log))
+        for part in cleaned.split(" | "):
+            part = part.strip()
+            if part:
+                bullets.append(part)
+
+    if win_prob is not None:
         threshold_val = ai_threshold if ai_threshold is not None else 55.0
-        status = "PASS" if ai_win >= threshold_val else "BLOCKED"
-        lines.append(
-            f"AI Meta-Label: win={ai_win:.1f}% | threshold>={threshold_val:.0f}% | {status}"
-        )
+        status = "PASS" if win_prob >= threshold_val else "BLOCKED"
+        bullets.append(f"AI filter: {status} (ngưỡng ≥{threshold_val:.0f}%)")
+
     for monitor_line in format_entry_scoring_monitor(
         trend_signal.meta.get("entry_scoring")
     ):
-        lines.append(monitor_line.strip())
-    confluence = _strategy_confluence(trend_signal)
-    if confluence:
-        lines.append(f"Confluence: {confluence}")
+        bullets.append(monitor_line.strip())
+
+    for result in trend_signal.strategy_results:
+        label = _STRATEGY_LABELS.get(result.name, result.name)
+        bullets.append(f"{label}: {result.score:+.2f}")
+
     if extra:
-        lines.append(extra)
-    return "\n".join(lines) if lines else "Tín hiệu entry từ bot"
+        bullets.append(extra)
+
+    if not bullets:
+        bullets.append("Tín hiệu entry từ bot")
+    return bullets, win_prob
 
 
 def _price_pnl_percent(side: OrderSide, entry: float, exit_px: float) -> float:
@@ -149,6 +162,9 @@ def plan_and_position_to_open_alert(
     *,
     extra: str | None = None,
 ) -> OpenTradeAlert:
+    reason_lines, win_probability = build_entry_reason_lines(
+        trend_signal, extra=extra
+    )
     return OpenTradeAlert(
         symbol=position.symbol,
         direction=order_side_to_direction(plan.side),
@@ -156,7 +172,8 @@ def plan_and_position_to_open_alert(
         sl=position.current_sl,
         tp=position.current_tp,
         ticket_id=position.ticket_id,
-        reason=build_entry_reason(trend_signal, extra=extra),
+        reason_lines=tuple(reason_lines),
+        win_probability=win_probability,
     )
 
 

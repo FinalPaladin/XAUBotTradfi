@@ -12,7 +12,7 @@ from app.models import OrderSide, TradeHistory, TradePosition
 from app.trading.basket_manager import build_position_basket, calculate_net_pnl_usd
 from app.trading.trading_mode import NORMAL_FULL_STACK_LOSS_PCT
 
-DAILY_PROFIT_LOCK_USD = 30.0
+DAILY_PROFIT_LOCK_USD = 35.0
 DAILY_LOSS_CAP_PCT = NORMAL_FULL_STACK_LOSS_PCT  # 40% balance — cùng ngưỡng full-stack DCA
 
 
