@@ -195,22 +195,20 @@ def build_layer_plan(
         return None
 
     anchor = basket_anchor_price if basket_anchor_price is not None else entry_price
-    use_broker_sl_tp = layer_index == 0
+    use_broker_sl_tp = layer_index == 0 and scalp
 
     sl_price: float | None = None
     tp_price: float | None = None
 
     if use_broker_sl_tp:
         tp_min_usd = resolve_single_tp_min(config, balance)
-        if base_volume > 0:
+        if volume > 0:
             scalp_dist = max(
-                tp_min_usd / (base_volume * 100.0),
+                tp_min_usd / (volume * 100.0),
                 config.single_tp_distance,
             )
         else:
             scalp_dist = config.single_tp_distance
-        if scalp:
-            scalp_dist *= SCALP_TP_MULTIPLIER
         if side == OrderSide.BUY:
             tp_price = round(entry_price + scalp_dist, 2)
         else:

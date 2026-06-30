@@ -43,7 +43,7 @@ def dca_config() -> BotConfig:
         max_layers=4,
         layer_spacing_min=4.0,
         layer_spacing_max=4.0,
-        basket_tp_min_usd=1.0,
+        basket_tp_min_usd=2.0,
         basket_tp_max_usd=5.0,
         single_tp_min_usd=1.0,
         single_tp_max_usd=2.0,
@@ -112,10 +112,10 @@ def test_single_layer_scalp_tp_usd(dca_config: BotConfig) -> None:
     assert check_single_layer_scalp_tp(dca_config, basket, 2650.5)
 
 
-def test_joint_tp_requires_1_usd_for_dca(dca_config: BotConfig) -> None:
+def test_joint_tp_requires_2_usd_for_dca(dca_config: BotConfig) -> None:
     basket = _basket_buy([(2650.0, 0.02), (2645.0, 0.027)])
-    assert not check_joint_take_profit(dca_config, basket, 2647.3)
-    assert check_joint_take_profit(dca_config, basket, 2647.4)
+    assert not check_joint_take_profit(dca_config, basket, 2647.4)
+    assert check_joint_take_profit(dca_config, basket, 2647.6)
 
 
 def test_check_hard_stop_12_gold(dca_config: BotConfig) -> None:

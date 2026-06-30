@@ -7,7 +7,6 @@ import pytest
 from app.models import BotConfig, BotStatus
 from app.models import OrderSide
 from app.trading.risk import (
-    SCALP_TP_MULTIPLIER,
     SCALP_VOLUME_MULTIPLIER,
     build_layer_plan,
     calculate_fixed_lot_size,
@@ -15,6 +14,7 @@ from app.trading.risk import (
     capital_scale_factor,
     dynamic_first_layer_notional,
     resolve_basket_tp_min,
+    resolve_single_tp_min,
     scaled_tp_usd,
 )
 
@@ -78,9 +78,7 @@ def test_scalp_mode_halves_volume(config: BotConfig) -> None:
     assert scalp == pytest.approx(normal * SCALP_VOLUME_MULTIPLIER)
 
 
-def test_scalp_mode_halves_tp_distance(
-    config: BotConfig, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_scalp_mode_sets_broker_tp(config: BotConfig, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "app.trading.risk._clamp_volume",
         lambda _symbol, volume: volume,
@@ -102,7 +100,12 @@ def test_scalp_mode_halves_tp_distance(
         is_scalp_mode=True,
     )
     assert normal is not None and scalp is not None
-    normal_dist = normal.tp_price - normal.entry_price
+    assert normal.tp_price is None
+    assert scalp.tp_price is not None
     scalp_dist = scalp.tp_price - scalp.entry_price
-    assert scalp_dist == pytest.approx(normal_dist * SCALP_TP_MULTIPLIER)
+    expected_min_dist = max(
+        resolve_single_tp_min(config, 10_000) / (scalp.volume * 100.0),
+        config.single_tp_distance,
+    )
+    assert scalp_dist >= expected_min_dist - 0.01
     assert "SCALP" in scalp.comment

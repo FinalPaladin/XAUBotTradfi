@@ -413,11 +413,13 @@ def check_single_layer_scalp_tp(
     current_price: float,
     account_balance: float | None = None,
 ) -> bool:
-    """Lớp đơn — cùng ngưỡng profit target."""
+    """Lớp đơn scalp — đóng khi P&L ≥ single_tp_min (mặc định $1, scale theo balance)."""
     if basket.layer_count != 1:
         return False
-    _ = account_balance
-    return check_basket_profit_target(config, basket, current_price)
+    net_pnl = calculate_net_pnl_usd(basket, current_price)
+    balance = account_balance or config.base_equity_usd or 200.0
+    tp_min = resolve_single_tp_min(config, balance)
+    return net_pnl >= tp_min
 
 
 def check_hard_stop_loss(
@@ -660,18 +662,26 @@ def evaluate_basket(
             meta=meta,
         )
 
-    if core and check_basket_profit_target(
-        config, basket, current_price, account_balance
-    ):
-        tp_min = resolve_basket_tp_min(
-            config, account_balance or config.base_equity_usd or 200.0
+    balance = account_balance or config.base_equity_usd or 200.0
+    scalp_single = ctx.is_scalp_mode and basket.layer_count == 1
+    tp_hit = (
+        check_single_layer_scalp_tp(config, basket, current_price, balance)
+        if scalp_single
+        else check_basket_profit_target(config, basket, current_price, balance)
+    )
+    if core and tp_hit:
+        tp_min = (
+            resolve_single_tp_min(config, balance)
+            if scalp_single
+            else resolve_basket_tp_min(config, balance)
         )
         core_tickets = [layer.ticket_id for layer in core]
         meta["core_pnl_usd"] = core_pnl
         meta["basket_tp_min_usd"] = tp_min
+        close_reason = "CLOSE_SINGLE_SCALP" if scalp_single else "CORE_BASKET_TP"
         return BasketDecision(
             BasketAction.CLOSE_BASKET_TP,
-            close_reason="CORE_BASKET_TP",
+            close_reason=close_reason,
             meta=meta,
             close_ticket_ids=core_tickets,
         )

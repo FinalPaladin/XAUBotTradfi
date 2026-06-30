@@ -8,7 +8,7 @@ from app.models import BotConfig, TradingMode
 NORMAL_MAX_LAYERS = 999
 NORMAL_CORE_HOLD_LAYERS = 3
 NORMAL_LAYER_SPACING = 5.0
-NORMAL_BASKET_TP_USD = 1.0
+NORMAL_BASKET_TP_USD = 2.0
 NORMAL_FULL_STACK_LOSS_PCT = 40.0
 
 # SUPER_SAFE — stricter entry, smaller stack, tighter exits

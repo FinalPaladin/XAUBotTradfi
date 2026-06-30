@@ -428,6 +428,34 @@ def _migrate_fix_history_opened_at_shift() -> None:
             db.commit()
 
 
+def _migrate_tp_thresholds_v5() -> None:
+    """Scalp TP min $1, Normal joint TP min $2 — tránh đóng lệnh quá sớm."""
+    from sqlalchemy import inspect, text
+
+    insp = inspect(engine)
+    if "bot_config" not in insp.get_table_names():
+        return
+
+    existing = {c["name"] for c in insp.get_columns("bot_config")}
+    if "basket_tp_min_usd" not in existing:
+        return
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "UPDATE bot_config SET basket_tp_min_usd = 2.0 "
+                "WHERE basket_tp_min_usd < 2.0"
+            )
+        )
+        if "single_tp_min_usd" in existing:
+            conn.execute(
+                text(
+                    "UPDATE bot_config SET single_tp_min_usd = 1.0 "
+                    "WHERE single_tp_min_usd > 1.0"
+                )
+            )
+
+
 def init_db() -> None:
     """Create tables if missing and seed default bot config when empty."""
     from app import models  # noqa: F401 — register models with Base.metadata
@@ -441,6 +469,7 @@ def init_db() -> None:
     _migrate_trading_mode_and_dca_v4()
     _migrate_fix_atr_stop_multiplier()
     _migrate_trading_mode_manual()
+    _migrate_tp_thresholds_v5()
     _migrate_fix_history_opened_at_shift()
     with SessionLocal() as db:
         seeded_bot = seed_if_empty(db)

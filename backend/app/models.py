@@ -128,7 +128,7 @@ class BotConfig(Base):
     )
     layer_spacing_min: Mapped[float] = mapped_column(Float, default=5.0, nullable=False)
     layer_spacing_max: Mapped[float] = mapped_column(Float, default=5.0, nullable=False)
-    basket_tp_min_usd: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
+    basket_tp_min_usd: Mapped[float] = mapped_column(Float, default=2.0, nullable=False)
     basket_tp_max_usd: Mapped[float] = mapped_column(Float, default=5.0, nullable=False)
     single_tp_min_usd: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
     single_tp_max_usd: Mapped[float] = mapped_column(Float, default=2.0, nullable=False)

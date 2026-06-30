@@ -34,7 +34,7 @@ def _default_xauusd_bot() -> BotConfig:
         dca_volume_multiplier=1.0,
         layer_spacing_min=5.0,
         layer_spacing_max=5.0,
-        basket_tp_min_usd=1.0,
+        basket_tp_min_usd=2.0,
         basket_tp_max_usd=5.0,
         single_tp_min_usd=1.0,
         single_tp_max_usd=3.0,
