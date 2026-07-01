@@ -168,7 +168,7 @@ def build_layer_plan(
     """
     Tạo OrderPlan cho một lớp.
 
-    Lớp 0: broker TP theo scalp distance (đã scale theo balance).
+    Lớp 0 scalp: TP mục tiêu ≥ single_tp_min_usd — chỉ chốt qua bot (không gắn TP broker).
     Lớp 1+: không gắn SL/TP broker — thoát bằng Joint Close basket.
     """
     balance = account_balance if account_balance else resolve_account_balance()
@@ -195,20 +195,17 @@ def build_layer_plan(
         return None
 
     anchor = basket_anchor_price if basket_anchor_price is not None else entry_price
-    use_broker_sl_tp = layer_index == 0 and scalp
+    use_broker_sl_tp = False
 
     sl_price: float | None = None
     tp_price: float | None = None
 
-    if use_broker_sl_tp:
+    if scalp:
         tp_min_usd = resolve_single_tp_min(config, balance)
-        if volume > 0:
-            scalp_dist = max(
-                tp_min_usd / (volume * 100.0),
-                config.single_tp_distance,
-            )
-        else:
-            scalp_dist = config.single_tp_distance
+        scalp_dist = max(
+            tp_min_usd / (volume * 100.0),
+            config.single_tp_distance,
+        )
         if side == OrderSide.BUY:
             tp_price = round(entry_price + scalp_dist, 2)
         else:

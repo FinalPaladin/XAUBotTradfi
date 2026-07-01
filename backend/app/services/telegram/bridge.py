@@ -170,7 +170,7 @@ def plan_and_position_to_open_alert(
         direction=order_side_to_direction(plan.side),
         entry=position.entry_price,
         sl=position.current_sl,
-        tp=position.current_tp,
+        tp=plan.tp_price or position.current_tp,
         ticket_id=position.ticket_id,
         reason_lines=tuple(reason_lines),
         win_probability=win_probability,

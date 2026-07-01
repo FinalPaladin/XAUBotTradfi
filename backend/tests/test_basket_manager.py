@@ -240,6 +240,8 @@ def test_evaluate_basket_panic_signal_disabled(dca_config: BotConfig) -> None:
 
 def test_evaluate_basket_m5_reversal_disabled(dca_config: BotConfig) -> None:
     """M5_REVERSAL tắt — basket lỗ + M5 flip vẫn HOLD để DCA."""
+    dca_config.max_basket_loss_usd = 50.0
+    dca_config.max_basket_loss_pct = 0.0
     basket = _basket_sell([(2650.0, 0.02), (2654.0, 0.027)])
     ctx = BasketContext(
         main_trend=MainTrend.BEARISH,
@@ -352,8 +354,9 @@ def test_core_basket_tp_closes_only_core_layers(dca_config: BotConfig) -> None:
 
 
 def test_total_loss_cut_without_full_stack(dca_config: BotConfig) -> None:
-    """Cắt all khi tổng lỗ ≥ 40% balance — không cần đủ 4 lớp."""
-    dca_config.max_basket_loss_pct = 40.0
+    """Cắt all khi tổng lỗ ≥ cap USD — không cần đủ 4 lớp."""
+    dca_config.max_basket_loss_pct = 0.0
+    dca_config.max_basket_loss_usd = 25.0
     basket = _basket_sell([(4100.0, 0.01), (4105.0, 0.01)])
     decision = evaluate_basket(
         dca_config,

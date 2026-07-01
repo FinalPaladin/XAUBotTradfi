@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from app.models import OrderSide
-from app.trading.risk import SCALP_TP_MULTIPLIER, calculate_fixed_lot_size
+from app.trading.risk import calculate_fixed_lot_size
 
 DEFAULT_LABEL_HORIZON = 288  # ~24h trên M5
 REFERENCE_BALANCE = 200.0
@@ -23,19 +23,16 @@ def resolve_tp_distance(
     is_scalp_mode: bool,
     balance: float = REFERENCE_BALANCE,
 ) -> float:
-    """Khoảng cách TP (giá Vàng) — mirror build_layer_plan lớp 0."""
+    """Khoảng cách TP (giá Vàng) — mirror build_layer_plan lớp 0 scalp."""
     base_volume = calculate_fixed_lot_size(balance)
+    if is_scalp_mode:
+        base_volume = max(0.01, round(base_volume * 0.5, 2))
     tp_min_usd = float(getattr(config, "single_tp_min_usd", 1.0) or 1.0)
     single_tp_distance = float(getattr(config, "single_tp_distance", 1.2) or 1.2)
 
     if base_volume > 0:
-        tp_dist = max(tp_min_usd / (base_volume * 100.0), single_tp_distance)
-    else:
-        tp_dist = single_tp_distance
-
-    if is_scalp_mode:
-        tp_dist *= SCALP_TP_MULTIPLIER
-    return tp_dist
+        return max(tp_min_usd / (base_volume * 100.0), single_tp_distance)
+    return single_tp_distance
 
 
 def resolve_sl_distance(config) -> float:

@@ -71,7 +71,7 @@ def format_tick_log(result: dict) -> str:
         lines.append(f"  filter: {filter_log}")
 
     if s.get("is_scalp_mode"):
-        lines.append("  mode: SCALP (50% volume, 50% TP distance)")
+        lines.append("  mode: SCALP (50% volume, chốt ≥ $1 qua bot)")
 
     action = s.get("action")
     if action:

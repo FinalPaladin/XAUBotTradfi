@@ -387,13 +387,12 @@ def check_dca_full_stack_loss(
     current_price: float,
     account_balance: float | None = None,
 ) -> bool:
-    """Tổng lỗ basket ≥ % balance → cắt toàn bộ (không cần đủ số lớp)."""
+    """Tổng lỗ basket ≥ cap → cắt toàn bộ (không cần đủ số lớp)."""
     net_pnl = calculate_net_pnl_usd(basket, current_price)
     if net_pnl >= 0:
         return False
-    balance = account_balance or config.base_equity_usd or 200.0
-    limit_pct = effective_full_stack_loss_pct(config)
-    return net_pnl <= -(balance * limit_pct / 100.0)
+    limit = resolve_max_basket_loss_limit(config, account_balance)
+    return net_pnl <= -limit
 
 
 def check_joint_take_profit(
@@ -628,7 +627,7 @@ def evaluate_basket(
     """
     Đánh giá basket — 3 rule thoát:
 
-    1. Tổng lỗ basket ≥ % balance (40%) → đóng hết
+    1. Tổng lỗ basket ≥ cap (USD hoặc % balance) → đóng hết
     2. Core gồng (≤3 lớp đầu) P&L ≥ basket TP → đóng core (giữ vệ tinh nếu có)
     3. Lớp vệ tinh (index ≥ 3) — chốt lẻ qua position_monitor
     """
@@ -655,7 +654,9 @@ def evaluate_basket(
     }
 
     if check_dca_full_stack_loss(config, basket, current_price, account_balance):
-        meta["full_stack_loss_pct"] = effective_full_stack_loss_pct(config)
+        meta["full_stack_loss_limit_usd"] = resolve_max_basket_loss_limit(
+            config, account_balance
+        )
         return BasketDecision(
             BasketAction.CLOSE_DCA_FULL_STACK_LOSS,
             close_reason="DCA_FULL_STACK_LOSS",

@@ -102,6 +102,7 @@ def test_scalp_mode_sets_broker_tp(config: BotConfig, monkeypatch: pytest.Monkey
     assert normal is not None and scalp is not None
     assert normal.tp_price is None
     assert scalp.tp_price is not None
+    assert scalp.use_broker_sl_tp is False
     scalp_dist = scalp.tp_price - scalp.entry_price
     expected_min_dist = max(
         resolve_single_tp_min(config, 10_000) / (scalp.volume * 100.0),
