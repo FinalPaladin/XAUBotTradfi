@@ -49,22 +49,25 @@ from app.trading.basket_manager import (
     should_open_initial_layer,
     should_open_reversal_hedge_layer,
 )
-from app.trading.drawdown_guard import (
-    DD_PANIC_THRESHOLD_PCT,
-    DD_PARTIAL_THRESHOLD_PCT,
-    current_drawdown_percent,
-)
+from app.trading.drawdown_guard import current_drawdown_percent
 from app.trading.indicators.atr import average_true_range
 from app.trading.indicators.donchian import donchian_channel
 from app.trading.indicators.ema import ema
 from app.trading.indicators.rsi_divergence import rsi
 from app.trading.indicators.supertrend import supertrend
 from app.trading.risk import SCALP_VOLUME_MULTIPLIER, calculate_fixed_lot_size
+from app.trading.scoring import compute_strategy_scores
+from app.trading.strategies import donchian_strategy, supertrend_strategy
 from app.trading.strategies.donchian_strategy import _pullback_score
 from app.trading.signal_engine import (
     MainTrend,
     _filter_entry_signal,
     _resolve_main_trend,
+)
+from app.trading.trading_mode import (
+    effective_scalp_entry_threshold,
+    effective_signal_threshold,
+    is_super_safe,
 )
 from app.trading.types import AggregatedSignal, BasketAction, NetSignal
 
@@ -459,11 +462,13 @@ def compute_backtest_signal(
     atr_factor, atr_meta = atr_volatility_factor(df_m5)
     entry_signal = aggregate_signal(df_m5, config, apply_atr_filter=True)
 
-    final_net, is_scalp_mode, _ = _filter_entry_signal(
+    final_net, is_scalp_mode, _, _ = _filter_entry_signal(
         entry_signal.net_signal,
         entry_signal.weighted_score,
         main_trend,
-        entry_threshold=config.signal_threshold,
+        entry_threshold=effective_signal_threshold(config),
+        scalp_threshold=effective_scalp_entry_threshold(config),
+        super_safe=is_super_safe(config),
     )
 
     signal = AggregatedSignal(
@@ -605,11 +610,13 @@ def _build_signal_from_precomputed(
     entry_threshold = normalize_score(config.signal_threshold * atr_factor)
     entry_net = _net_from_weighted(entry_weighted, entry_threshold)
 
-    final_net, is_scalp_mode, _ = _filter_entry_signal(
+    final_net, is_scalp_mode, _, _ = _filter_entry_signal(
         entry_net,
         entry_weighted,
         main_trend,
-        entry_threshold=config.signal_threshold,
+        entry_threshold=effective_signal_threshold(config),
+        scalp_threshold=effective_scalp_entry_threshold(config),
+        super_safe=is_super_safe(config),
     )
 
     signal = AggregatedSignal(
